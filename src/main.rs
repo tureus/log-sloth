@@ -1,16 +1,25 @@
 use std::env;
 use std::net::{TcpListener, TcpStream};
 use std::io;
-use std::io::{ BufReader, BufRead };
+use std::io::{ BufReader, BufRead, Error, ErrorKind };
+use std::process::exit;
 
 fn main() {
   let args : Vec<String> = env::args().collect();
 
+  if args.len() < 2 {
+    println!("must set action to 'server' or 'client'");
+    exit(1)
+  }
+
   match &args[1][..] {
     "server" => server(),
     "client" => unimplemented!(),
-    other => unimplemented!()
-  };
+    other => {
+      println!("we don't handle {:?}, use 'server' or 'client'", other);
+      Ok(())
+    }
+  }.unwrap();
 
   ()
 }
@@ -26,29 +35,42 @@ fn server() -> Result<(),io::Error> {
 }
 
 fn handle_client(stream: &mut TcpStream) -> Result<(),io::Error> {
-  let mut bufr = BufReader::with_capacity(4*1024, stream);
+  let bufr = BufReader::with_capacity(4*1024, stream);
   for line in bufr.lines() {
     handle_line(line?)?
   }
   Ok(())
 }
 
-pub trait LogProcessor {
-  fn process(string: String) -> String
+fn handle_line(line: String) -> Result<(),io::Error> {
+  let f = Fortigate{};
+  f.process(&line[..]);
+
+  Ok(())
 }
 
-struct FortigateProcessor {}
+pub trait LogProcessor {
+  fn process(&self, string: &str) -> Result<String,io::Error>;
+}
 
-impl LogProcessor for FortigateProcessor {
-  fn process(string: String) -> Result<String,()> {
-    println!("sup {}", string);
-    Err(())
+struct Fortigate {}
+
+impl LogProcessor for Fortigate {
+  fn process(&self, string: &str) -> Result<String,io::Error> {
+    // println!("sup {}", string);
+    let _ : Vec<Vec<String>> = string.split_whitespace().map(|x| x.split(' ').map(|x| x.to_owned()).collect()).collect();
+    // Err(Error::new(ErrorKind::InvalidData, "bad line".to_string()))
+    Ok("yes".to_owned())
   }
 }
 
-fn handle_line(line: String) -> Result<(),io::Error> {
-  let fp : FortigateProcessor = FortigateProcessor{};
+pub struct NLog {
+  pub application: String
+}
 
-  fp.process(line);
-  Ok(())
+#[test]
+fn fortigate_parses(){
+  let f = Fortigate{};
+  let res = f.process("a=b c=d e=f g=h");
+  assert_eq!(res.unwrap(),"123")
 }
