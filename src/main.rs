@@ -28,7 +28,7 @@ fn server() -> Result<(),io::Error> {
   let listener = TcpListener::bind("0.0.0.0:1516")?;
 
   for stream in listener.incoming() {
-    handle_client(&mut stream?);
+    let _res = handle_client(&mut stream?);
   };
 
   Ok(())
@@ -44,7 +44,7 @@ fn handle_client(stream: &mut TcpStream) -> Result<(),io::Error> {
 
 fn handle_line(line: String) -> Result<(),io::Error> {
   let f = Fortigate{};
-  f.process(&line[..]);
+  let _res = f.process(&line[..]);
 
   Ok(())
 }
@@ -58,8 +58,12 @@ struct Fortigate {}
 impl LogProcessor for Fortigate {
   fn process(&self, string: &str) -> Result<String,io::Error> {
     // println!("sup {}", string);
-    let _ : Vec<Vec<String>> = string.split_whitespace().map(|x| x.split(' ').map(|x| x.to_owned()).collect()).collect();
+    let tokens : Vec<Vec<String>> = string.split_whitespace().map(|x| x.split(' ').map(|x| x.to_owned()).collect()).collect();
     // Err(Error::new(ErrorKind::InvalidData, "bad line".to_string()))
+
+    // first dim is within line, 2nd dim is line
+    println!("token value: {:?}", &tokens[0][0][..]);
+
     Ok("yes".to_owned())
   }
 }
