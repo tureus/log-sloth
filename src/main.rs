@@ -74,7 +74,7 @@ impl SyslogServer {
         let tracking_stream = stream.try_clone()?;
         self.streams.push(tracking_stream);
 
-        let mut syslog_stream = SyslogStream::new(stream, self.running.clone());
+        let syslog_stream = SyslogStream::new(stream, self.running.clone());
         syslog_stream.handle_client()?;
 
         Ok(())
@@ -133,38 +133,30 @@ impl SyslogStream {
     }
 
     fn handle_client(&self) -> Result<(), io::Error> {
-        let addr = match self.stream.peer_addr() {
-            Ok(ok_addr) => {
-                ok_addr
-            },
-            Err(terrible) => {
-                println!("terrible stuff happened! {:?}", terrible);
-                return Err(terrible);
-            },
-        };
-
+        let addr = self.stream.peer_addr()?;
         let bufr = BufReader::with_capacity(4 * 1024, &self.stream);
         for line in bufr.lines() {
-            let log = self.handle_line(line?, &addr)?;
+            let mut log = self.handle_line(line?)?;
+            log.sender_ip = Some(addr.clone());
             println!("log: {:?}", log);
         }
         Ok(())
     }
 
-    fn handle_line(&self, line: String, addr: &std::net::SocketAddr) -> Result<Log, io::Error> {
+    fn handle_line(&self, line: String) -> Result<Log, io::Error> {
         let f = Fortigate {};
-        f.process(&line[..], addr)
+        f.process(&line[..])
     }
 }
 
 pub trait LogProcessor {
-    fn process(&self, string: &str, stream: &std::net::SocketAddr) -> Result<Log, io::Error>;
+    fn process(&self, string: &str) -> Result<Log, io::Error>;
 }
 
 struct Fortigate {}
 
 impl LogProcessor for Fortigate {
-    fn process(&self, line: &str, addr: &std::net::SocketAddr) -> Result<Log, io::Error> {
+    fn process(&self, line: &str) -> Result<Log, io::Error> {
         // println!("sup {}", string);
         let table: Vec<Vec<String>> = line
             .split_whitespace()
@@ -176,7 +168,7 @@ impl LogProcessor for Fortigate {
         // Err(Error::new(ErrorKind::InvalidData, "bad line".to_string()))
         Ok(Log {
             app: "fortigate".to_owned(),
-            sender_ip: addr.clone(),
+            sender_ip: None,
             kv: Some(table),
             message: None,
         })
@@ -186,7 +178,7 @@ impl LogProcessor for Fortigate {
 #[derive(PartialEq, Debug)]
 pub struct Log {
     pub app: String,
-    pub sender_ip: std::net::SocketAddr,
+    pub sender_ip: Option<std::net::SocketAddr>,
     pub kv: Option<Vec<Vec<String>>>,
     pub message: Option<String>,
 }
@@ -194,18 +186,38 @@ pub struct Log {
 #[test]
 fn fortigate_parses() {
     let f = Fortigate {};
-    let addr = std::net::SocketAddr::V4("127.0.0.1:8080".parse().unwrap());
-    let res = { f.process("a=b c=d e=f g=h", &addr) };
+    let res = { f.process("a=b c=d e=f g=h") };
     assert_eq!(
         res.unwrap(),
         Log {
             app: "fortigate".to_owned(),
-            sender_ip: addr,
+            sender_ip: None,
             kv: Some(vec![
                 vec!["a".into(), "b".into()],
                 vec!["c".into(), "d".into()],
                 vec!["e".into(), "f".into()],
                 vec!["g".into(), "h".into()],
+            ]),
+            message: None,
+        }
+    )
+}
+
+#[test]
+fn fortigate_parses_bad_kv() {
+    let f = Fortigate {};
+    let res = { f.process("a=b I AM BAD c=d") };
+    assert_eq!(
+        res.unwrap(),
+        Log {
+            app: "fortigate".to_owned(),
+            sender_ip: None,
+            kv: Some(vec![
+                vec!["a".into(), "b".into()],
+                vec!["I".into()],
+                vec!["AM".into()],
+                vec!["BAD".into()],
+                vec!["c".into(), "d".into()],
             ]),
             message: None,
         }
