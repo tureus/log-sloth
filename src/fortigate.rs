@@ -74,3 +74,20 @@ fn fortigate_parses() {
         }
     )
 }
+
+#[test]
+fn fortigate_parses_bad_kv() {
+    let made_up_data = r##"{"name": "fortigate", "kv":"I=am bad data a=map and skipped"}"##;
+    let v: Fortigate = serde_json::from_str(made_up_data).unwrap();
+    let mut hash_map: HashMap<String, String> = HashMap::new();
+    hash_map.insert("I".into(), "am".into());
+    hash_map.insert("a".into(), "map".into());
+
+    assert_eq!(
+        v,
+        Fortigate {
+            name: "fortigate".into(),
+            kv: FortigateKV(hash_map),
+        }
+    )
+}
