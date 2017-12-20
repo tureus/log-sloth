@@ -38,13 +38,13 @@ impl<'de> Visitor<'de> for FortigateKVVisitor<String, String> where {
     where
         E: de::Error,
     {
-        let hashmap: HashMap<String, String> = kvs.split_whitespace()
+        let hash_map: HashMap<String, String> = kvs.split_whitespace()
             .map(|kv_part| kv_part.split("=").collect::<Vec<&str>>())
             .filter(|x| x.len() == 2)
             .map(|split_list| (split_list[0].to_owned(), split_list[1].to_owned()))
             .collect();
 
-        Ok(hashmap)
+        Ok(hash_map)
     }
 }
 
