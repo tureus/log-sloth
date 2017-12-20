@@ -1,9 +1,6 @@
 use std::collections::HashMap;
-use std::fmt;
-use std::marker::PhantomData;
 
-use serde::de;
-use serde::de::{Deserialize, Deserializer, Visitor};
+use serde::de::{Deserialize, Deserializer};
 use serde_json;
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -15,46 +12,17 @@ struct Fortigate {
 #[derive(Debug, PartialEq)]
 struct FortigateKV(HashMap<String, String>);
 
-struct FortigateKVVisitor<K, V> {
-    marker: PhantomData<fn() -> HashMap<K, V>>,
-}
-
-impl<K, V> FortigateKVVisitor<K, V> {
-    fn new() -> Self {
-        FortigateKVVisitor {
-            marker: PhantomData,
-        }
-    }
-}
-
-impl<'de> Visitor<'de> for FortigateKVVisitor<String, String> where {
-    type Value = HashMap<String, String>;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a fortigate k=v map")
-    }
-
-    fn visit_str<E>(self, kvs: &str) -> Result<HashMap<String, String>, E>
-    where
-        E: de::Error,
-    {
-        let hash_map: HashMap<String, String> = kvs.split_whitespace()
-            .map(|kv_part| kv_part.split("=").collect::<Vec<&str>>())
-            .filter(|x| x.len() == 2)
-            .map(|split_list| (split_list[0].to_owned(), split_list[1].to_owned()))
-            .collect();
-
-        Ok(hash_map)
-    }
-}
-
 impl<'a> Deserialize<'a> for FortigateKV {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'a>,
     {
-        Ok(FortigateKV(deserializer
-            .deserialize_string(FortigateKVVisitor::new())?))
+        let raw = String::deserialize(deserializer)?;
+        Ok(FortigateKV(raw.split_whitespace()
+                           .map(|kv_part| kv_part.split("=").collect::<Vec<&str>>())
+                           .filter(|x| x.len() == 2)
+                           .map(|split_list| (split_list[0].to_owned(), split_list[1].to_owned()))
+                           .collect()))
     }
 }
 
