@@ -12,7 +12,7 @@ struct Fortigate {
     kv: FortigateKV,
 }
 
-#[derive(Debug,PartialEq)]
+#[derive(Debug, PartialEq)]
 struct FortigateKV(HashMap<String, String>);
 
 struct FortigateKVVisitor<K, V> {
@@ -27,9 +27,7 @@ impl<K, V> FortigateKVVisitor<K, V> {
     }
 }
 
-impl<'de> Visitor<'de> for FortigateKVVisitor<String, String>
-where
-{
+impl<'de> Visitor<'de> for FortigateKVVisitor<String, String> where {
     type Value = HashMap<String, String>;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
@@ -40,13 +38,11 @@ where
     where
         E: de::Error,
     {
-        let hashmap: HashMap<String, String> = kvs
-            .split_whitespace()
-            .map(|kv_part| {
-                kv_part.split("=").collect::<Vec<&str>>()
-            }).filter(|x| { x.len() == 2 }).map(|split_list|
-                (split_list[0].to_owned(), split_list[1].to_owned())
-            ).collect();
+        let hashmap: HashMap<String, String> = kvs.split_whitespace()
+            .map(|kv_part| kv_part.split("=").collect::<Vec<&str>>())
+            .filter(|x| x.len() == 2)
+            .map(|split_list| (split_list[0].to_owned(), split_list[1].to_owned()))
+            .collect();
 
         Ok(hashmap)
     }
@@ -57,9 +53,8 @@ impl<'a> Deserialize<'a> for FortigateKV {
     where
         D: Deserializer<'a>,
     {
-        let viz = FortigateKVVisitor::new();
-
-        Ok(FortigateKV(deserializer.deserialize_string(viz)?))
+        Ok(FortigateKV(deserializer
+            .deserialize_string(FortigateKVVisitor::new())?))
     }
 }
 
@@ -67,12 +62,15 @@ impl<'a> Deserialize<'a> for FortigateKV {
 fn fortigate_parses() {
     let made_up_data = r##"{"name": "fortigate", "kv":"I=am a=map"}"##;
     let v: Fortigate = serde_json::from_str(made_up_data).unwrap();
-    let mut hash_map : HashMap<String,String> = HashMap::new();
+    let mut hash_map: HashMap<String, String> = HashMap::new();
     hash_map.insert("I".into(), "am".into());
     hash_map.insert("a".into(), "map".into());
 
-    assert_eq!(v, Fortigate{
-        name: "fortigate".into(),
-        kv: FortigateKV(hash_map),
-    })
+    assert_eq!(
+        v,
+        Fortigate {
+            name: "fortigate".into(),
+            kv: FortigateKV(hash_map),
+        }
+    )
 }
