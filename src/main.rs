@@ -1,11 +1,13 @@
 extern crate ctrlc;
+extern crate rusoto_core;
+extern crate rusoto_kinesis;
 
 use std::{env, io, thread};
 use std::error::Error;
-use std::net::{TcpListener, TcpStream, Shutdown};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
-use std::sync::atomic::{ AtomicBool, Ordering };
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::process::exit;
 use std::time::Duration;
 
@@ -24,7 +26,6 @@ fn main() {
         r.store(false, Ordering::SeqCst);
     }).expect("Error setting Ctrl-C handler");
 
-
     println!("now starting up stuff...");
     match &args[1][..] {
         "server" => {
@@ -32,42 +33,66 @@ fn main() {
             match server.run() {
                 Ok(_) => {
                     println!("server shutdown happily");
-                },
+                }
                 Err(err) => {
                     if err.description() == "not connected" {
                         println!("server shutdown happily");
                     } else {
                         println!("server shutdown was NOT happy: {:?}", err.description());
                     }
-                },
+                }
             }
-        },
+
+            println!("Waiting for Ctrl-C...");
+            while running.load(Ordering::SeqCst) {}
+            println!("Got it! Exiting...");
+        }
         "client" => unimplemented!(),
+        "kinesis" => kinesis_stuff(),
         other => {
             println!("we don't handle {:?}, use 'server' or 'client'", other);
         }
     };
 
-    println!("Waiting for Ctrl-C...");
-    while running.load(Ordering::SeqCst) {}
-    println!("Got it! Exiting...");
-
     ()
+}
+
+pub fn kinesis_stuff() {
+    use rusoto_core::{default_tls_client, DefaultCredentialsProvider, Region};
+    use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput};
+
+    let stream_arn = "arn:aws:kinesis:us-west-2:455567940957:stream/itsecmon-logs";
+
+    let client = KinesisClient::new(
+        default_tls_client().unwrap(),
+        DefaultCredentialsProvider::new().unwrap(),
+        Region::UsWest2,
+    );
+
+    let streams = client.list_streams(&ListStreamsInput{
+        exclusive_start_stream_name: None,
+        limit: None,
+    });
+    println!("streams: {:?}", streams);
 }
 
 pub struct SyslogServer {
     pub running: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub streams: Vec<TcpStream>,
-    pub listener: Option<TcpListener>
+    pub listener: Option<TcpListener>,
 }
 
 impl SyslogServer {
     fn new(running: Arc<AtomicBool>) -> Self {
-        Self{ running, streams: vec![], listener: None }
+        Self {
+            running,
+            streams: vec![],
+            listener: None,
+        }
     }
 
     fn shutdown(&self) {
-//        self.listener
+        //        self.listener
     }
 
     fn handle_client(&mut self, stream: TcpStream) -> io::Result<()> {
@@ -86,19 +111,19 @@ impl SyslogServer {
 
         loop {
             match listener.accept() {
-                Ok((stream,_)) => {
+                Ok((stream, _)) => {
                     self.handle_client(stream)?;
-                },
+                }
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(10));
-                },
+                }
                 Err(ref e) => {
                     println!("not sure how to handle {:?}", e);
                 }
             }
 
-            if !self.running.load( Ordering::SeqCst) {
-                break
+            if !self.running.load(Ordering::SeqCst) {
+                break;
             }
         }
 
@@ -107,17 +132,14 @@ impl SyslogServer {
 }
 
 //#[derive(Clone)]
-pub struct SyslogStream{
+pub struct SyslogStream {
     stream: TcpStream,
-    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SyslogStream {
     fn new(stream: TcpStream, shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
-        Self {
-            stream,
-            shutdown
-        }
+        Self { stream, shutdown }
     }
 
     fn clone(&self) -> io::Result<Self> {
@@ -158,12 +180,8 @@ struct Fortigate {}
 impl LogProcessor for Fortigate {
     fn process(&self, line: &str) -> Result<Log, io::Error> {
         // println!("sup {}", string);
-        let table: Vec<Vec<String>> = line
-            .split_whitespace()
-            .map(|x| {
-                x.split('=').map(|y| y.to_string())
-                    .collect()
-            })
+        let table: Vec<Vec<String>> = line.split_whitespace()
+            .map(|x| x.split('=').map(|y| y.to_string()).collect())
             .collect();
         // Err(Error::new(ErrorKind::InvalidData, "bad line".to_string()))
         Ok(Log {
