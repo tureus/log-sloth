@@ -10,4 +10,4 @@ Running the server:
 
 Running the stress test:
 
-    cargo run --bin log-sloth --release
+    cargo run --bin stress --release
