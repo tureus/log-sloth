@@ -5,3 +5,14 @@ authors = ["Xavier Lange <xrlange@gmail.com>"]
 
 [dependencies]
 ctrlc = "*"
+serde = "*"
+serde_derive = "*"
+serde_json = "*"
+nom-syslog = "*"
+nom = "*"
+log = "*"
+env_logger = "*"
+pretty-bytes = "*"
+hyper = "*"
+rusoto_core = "*"
+rusoto_kinesis = "*"
