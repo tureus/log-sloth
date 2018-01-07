@@ -234,6 +234,7 @@ impl SyslogClient {
             let json_vecu8 = serde_json::to_vec(&log)?;
 
             let partition_key = format!("{}", counter);
+            counter += 1;
 
             recs.push(
                 PutRecordsRequestEntry{
