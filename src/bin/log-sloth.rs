@@ -222,6 +222,8 @@ impl SyslogClient {
         let capacity = 1000;
         let mut recs : Vec<PutRecordsRequestEntry> = Vec::with_capacity(capacity);
 
+        let mut counter = 0;
+
         for maybe_line in bufr.lines() {
             let line: String = maybe_line?;
             self.bytes_read += line.len();
@@ -229,13 +231,15 @@ impl SyslogClient {
             let mut log = self.parse_syslog_line(&line[..])?;
             log.sender_ip = Some(addr.clone());
 
-            let json = serde_json::to_vec(&log)?;
+            let json_vecu8 = serde_json::to_vec(&log)?;
+
+            let partition_key = format!("{}", counter);
 
             recs.push(
                 PutRecordsRequestEntry{
-                    data: json,
+                    data: json_vecu8,
                     explicit_hash_key: None,
-                    partition_key: "asdf".into(),
+                    partition_key: partition_key,
                 }
             );
 
@@ -245,22 +249,8 @@ impl SyslogClient {
                     stream_name: stream_name.clone(),
                 });
 
-//                match put_records_res {
-//                    Ok(output) => {
-//                        println!("")
-//                    },
-//                    Err(err) => {},
-//                }
                 recs.clear();
-                debug!("put_records_res={:?}", put_records_res);
-//                let recs : Vec<PutRecordsRequestEntry> = Vec::with_capacity(capacity);
             }
-//            let put_record_res = kinesis_client.put_records(&PutRecordsInput{
-//                records: Vec::new(),
-//                stream_name: String::new(),
-//            })
-
-//            debug!("log: {:?}", log);
         }
 
         info!(
