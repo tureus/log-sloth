@@ -245,12 +245,12 @@ impl SyslogClient {
                     stream_name: stream_name.clone(),
                 });
 
-                match put_records_res {
-                    Ok(output) => {
-                        println!("")
-                    },
-                    Err(err) => {},
-                }
+//                match put_records_res {
+//                    Ok(output) => {
+//                        println!("")
+//                    },
+//                    Err(err) => {},
+//                }
                 recs.clear();
                 debug!("put_records_res={:?}", put_records_res);
 //                let recs : Vec<PutRecordsRequestEntry> = Vec::with_capacity(capacity);
