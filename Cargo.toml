@@ -16,3 +16,6 @@ pretty-bytes = "*"
 hyper = "*"
 rusoto_core = "*"
 rusoto_kinesis = "*"
+
+[profile.release]
+lto = true
