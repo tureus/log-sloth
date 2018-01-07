@@ -219,7 +219,7 @@ impl SyslogClient {
         let addr = self.stream.peer_addr()?;
         let bufr = BufReader::with_capacity(4 * 1024, &self.stream);
 
-        let capacity = 1000;
+        let capacity = 500;
         let mut recs : Vec<PutRecordsRequestEntry> = Vec::with_capacity(capacity);
 
         let mut counter = 0;
@@ -248,7 +248,7 @@ impl SyslogClient {
                 let put_records_res = kinesis_client.put_records(&PutRecordsInput{
                     records: recs.clone(),
                     stream_name: stream_name.clone(),
-                });
+                }).expect("could not write data to kinesis stream");
 
                 recs.clear();
             }
