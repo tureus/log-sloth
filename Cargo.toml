@@ -13,7 +13,6 @@ nom = "*"
 log = "*"
 env_logger = "*"
 pretty-bytes = "*"
-hyper = "0.10.13"
 rusoto_core = { git = "https://github.com/srijs/rusoto-async", branch = "master" } # "*"
 rusoto_kinesis = { git = "https://github.com/srijs/rusoto-async", branch = "master" } # "*"
 
