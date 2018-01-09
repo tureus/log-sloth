@@ -7,7 +7,6 @@ extern crate pretty_bytes;
 extern crate serde_derive;
 extern crate serde_json;
 
-extern crate hyper;
 extern crate rusoto_core;
 extern crate rusoto_kinesis;
 
@@ -29,12 +28,20 @@ use nom::IResult;
 
 use pretty_bytes::converter::convert;
 
-use hyper::Client;
-use rusoto_core::{default_tls_client, DefaultCredentialsProviderSync, Region};
-use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordInput, PutRecordsInput, PutRecordsRequestEntry};
+use rusoto_core::Region;
+use rusoto_core::reactor::{CredentialsProvider, RequestDispatcher};
+use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsInput,
+                     PutRecordsRequestEntry};
 
 fn main() {
     env_logger::init().unwrap();
+
+    if env::var("USER").unwrap() == "root"
+        && (env::var("AWS_ACCESS_KEY_ID").is_err() || env::var("AWS_SECRET_ACCESS_KEY").is_err())
+    {
+        error!("if running as root, must set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY");
+        std::process::exit(1);
+    }
 
     let args: Vec<String> = env::args().collect();
 
@@ -87,7 +94,7 @@ fn get_kinesis_stream_name(thing: &DefaultKinesisClient) -> io::Result<String> {
         limit: None,
     });
 
-    let streams = match streams_response {
+    let streams = match streams_response.sync() {
         Ok(output) => output,
         Err(list_err) => {
             println!("oh no");
@@ -108,7 +115,7 @@ fn get_kinesis_stream_name(thing: &DefaultKinesisClient) -> io::Result<String> {
     Ok(streams.stream_names[0].clone())
 }
 
-type DefaultKinesisClient = Arc<KinesisClient<DefaultCredentialsProviderSync, Client>>;
+type DefaultKinesisClient = Arc<KinesisClient<CredentialsProvider, RequestDispatcher>>;
 
 pub struct SyslogServer {
     pub running: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -119,16 +126,13 @@ pub struct SyslogServer {
 
 impl SyslogServer {
     fn new(running: Arc<AtomicBool>) -> Self {
-        let k = KinesisClient::new(
-            default_tls_client().unwrap(),
-            DefaultCredentialsProviderSync::new().unwrap(),
-            Region::UsWest2,
-        );
+        let kinesis = KinesisClient::simple(Region::UsWest2);
+
         Self {
             running,
             streams: vec![],
             listener: None,
-            kinesis_client: Arc::new(k),
+            kinesis_client: Arc::new(kinesis),
         }
     }
 
@@ -215,12 +219,16 @@ impl SyslogClient {
         self.stream.shutdown(Shutdown::Both)
     }
 
-    fn run(&mut self, kinesis_client: DefaultKinesisClient, stream_name: String) -> Result<(), io::Error> {
+    fn run(
+        &mut self,
+        kinesis_client: DefaultKinesisClient,
+        stream_name: String,
+    ) -> Result<(), io::Error> {
         let addr = self.stream.peer_addr()?;
         let bufr = BufReader::with_capacity(4 * 1024, &self.stream);
 
         let capacity = 500;
-        let mut recs : Vec<PutRecordsRequestEntry> = Vec::with_capacity(capacity);
+        let mut recs: Vec<PutRecordsRequestEntry> = Vec::with_capacity(capacity);
 
         let mut counter = 0;
 
@@ -236,19 +244,20 @@ impl SyslogClient {
             let partition_key = format!("{}", counter);
             counter += 1;
 
-            recs.push(
-                PutRecordsRequestEntry{
-                    data: json_vecu8,
-                    explicit_hash_key: None,
-                    partition_key: partition_key,
-                }
-            );
+            recs.push(PutRecordsRequestEntry {
+                data: json_vecu8,
+                explicit_hash_key: None,
+                partition_key: partition_key,
+            });
 
             if recs.len() >= capacity {
-                let put_records_res = kinesis_client.put_records(&PutRecordsInput{
-                    records: recs.clone(),
-                    stream_name: stream_name.clone(),
-                }).expect("could not write data to kinesis stream");
+                let put_records_res = kinesis_client
+                    .put_records(&PutRecordsInput {
+                        records: recs.clone(),
+                        stream_name: stream_name.clone(),
+                    })
+                    .sync()
+                    .expect("could not write data to kinesis stream");
 
                 recs.clear();
             }
