@@ -15,6 +15,7 @@ env_logger = "*"
 pretty-bytes = "*"
 rusoto_core = { git = "https://github.com/srijs/rusoto-async", branch = "master" } # "*"
 rusoto_kinesis = { git = "https://github.com/srijs/rusoto-async", branch = "master" } # "*"
+prctl = "*"
 
 [profile.release]
 lto = true

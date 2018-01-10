@@ -10,6 +10,8 @@ extern crate serde_json;
 extern crate rusoto_core;
 extern crate rusoto_kinesis;
 
+extern crate prctl;
+
 extern crate env_logger;
 #[macro_use]
 extern crate log;
@@ -22,6 +24,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::process::exit;
 use std::time::Duration;
+use std::str::FromStr;
 
 use nom_syslog::parse_syslog;
 use nom::IResult;
@@ -34,6 +37,9 @@ use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsInput,
                      PutRecordsRequestEntry};
 
 fn main() {
+    #[cfg(linux)]
+    prctl::set_name("log-sloth main thread").unwrap();
+
     env_logger::init().unwrap();
 
     if env::var("USER").unwrap() == "root"
@@ -170,6 +176,14 @@ impl SyslogServer {
                     let stream_name_clone = stream_name.clone();
                     thread::spawn(move || {
                         info!("STARTING: thread for client {:?}", client);
+                        #[cfg(linux)]
+                        {
+                            let name = format!(
+                                "log-sloth client thread ({:?})",
+                                client.stream.peer_addr()
+                            );
+                            prctl::set_name().unwrap();
+                        }
                         let res = client.run(kclient_clone, stream_name_clone);
                         info!("STOPPING: thread for client ending with {:?}", res);
                     });
@@ -251,13 +265,31 @@ impl SyslogClient {
             });
 
             if recs.len() >= capacity {
-                let put_records_res = kinesis_client
+                let res = kinesis_client
                     .put_records(&PutRecordsInput {
                         records: recs.clone(),
                         stream_name: stream_name.clone(),
                     })
-                    .sync()
-                    .expect("could not write data to kinesis stream");
+                    .sync();
+                match res {
+                    Ok(output) => {
+                        if output.failed_record_count.is_some()
+                            && output.failed_record_count.unwrap() != 0
+                        {
+                            info!(
+                                "failed_record_count={}",
+                                output.failed_record_count.unwrap()
+                            );
+                            for rec in output.records {
+                                if rec.error_message.is_some() {
+                                    info!("failed with {}", rec.error_message.unwrap());
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => {}
+                }
+                //                    .expect("could not write data to kinesis stream");
 
                 recs.clear();
             }

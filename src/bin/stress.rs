@@ -1,9 +1,46 @@
+extern crate env_logger;
+#[macro_use]
+extern crate log;
 extern crate pretty_bytes;
 
 use std::net::TcpStream;
 use std::io::Write;
+use std::thread::JoinHandle;
+use std::env::args_os;
 
 fn main() {
+    env_logger::init().unwrap();
+    let args: Vec<String> = std::env::args().collect();
+
+    let mut arg_iter = args.iter();
+    let _ = arg_iter.next();
+
+    let num_messages: usize = if let Some(n) = arg_iter.next() {
+        n.parse().unwrap()
+    } else {
+        1000
+    };
+
+    let num_threads: usize = if let Some(n) = arg_iter.next() {
+        n.parse().unwrap()
+    } else {
+        1
+    };
+
+    info!(
+        "spawning stresser num_threads={} num_messages={}",
+        num_threads, num_messages
+    );
+    let _: Vec<JoinHandle<_>> = (0..num_threads)
+        .map(|_| {
+            std::thread::spawn(move || {
+                stress(num_messages).unwrap()
+            })
+        })
+        .collect();
+}
+
+fn stress(num_messages: usize) -> std::io::Result<()> {
     let mut stream =
         TcpStream::connect("127.0.0.1:1516").expect("Could not connect to the server!");
 
@@ -13,13 +50,15 @@ fn main() {
     let mut bytes_written = 0;
 
     let buf_bytes = buf.as_bytes();
-    for _ in 0..10000 {
-        bytes_written += stream.write(buf_bytes).expect("failed to write data");
+    for _ in 0..num_messages {
+        bytes_written += stream.write(buf_bytes)?;
     }
-    stream.flush().expect("failed to flush");
+    stream.flush()?;
 
     println!(
         "done! wrote {}",
         pretty_bytes::converter::convert(bytes_written as f64)
     );
+
+    Ok(())
 }
