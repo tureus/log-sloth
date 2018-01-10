@@ -31,13 +31,16 @@ fn main() {
         "spawning stresser num_threads={} num_messages={}",
         num_threads, num_messages
     );
-    let _: Vec<JoinHandle<_>> = (0..num_threads)
+    let hs: Vec<JoinHandle<()>> = (0..num_threads)
         .map(|_| {
             std::thread::spawn(move || {
-                stress(num_messages).unwrap()
+                stress(num_messages).unwrap();
             })
         })
         .collect();
+    for h in hs {
+        h.join();
+    }
 }
 
 fn stress(num_messages: usize) -> std::io::Result<()> {
