@@ -182,7 +182,7 @@ impl SyslogServer {
                                 "log-sloth client thread ({:?})",
                                 client.stream.peer_addr()
                             );
-                            prctl::set_name().unwrap();
+                            prctl::set_name(&name[..]).unwrap();
                         }
                         let res = client.run(kclient_clone, stream_name_clone);
                         info!("STOPPING: thread for client ending with {:?}", res);
