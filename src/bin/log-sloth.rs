@@ -7,6 +7,7 @@ extern crate pretty_bytes;
 extern crate serde_derive;
 extern crate serde_json;
 
+extern crate futures;
 extern crate rusoto_core;
 extern crate rusoto_kinesis;
 
@@ -31,10 +32,12 @@ use nom::IResult;
 
 use pretty_bytes::converter::convert;
 
-use rusoto_core::Region;
-use rusoto_core::reactor::{CredentialsProvider, RequestDispatcher};
-use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsInput,
-                     PutRecordsRequestEntry};
+use futures::{Future, Sink};
+use futures::stream::{futures_unordered, Stream, Wait};
+use rusoto_core::{Region, RusotoFuture};
+use rusoto_core::reactor::{CredentialsProvider, RequestDispatcher, DEFAULT_REACTOR};
+use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsError, PutRecordsInput,
+                     PutRecordsOutput, PutRecordsRequestEntry};
 
 fn main() {
     #[cfg(linux)]
@@ -233,6 +236,51 @@ impl SyslogClient {
         self.stream.shutdown(Shutdown::Both)
     }
 
+    fn spawn_kinesis_pipeline_threadpool(
+        &self,
+        client: DefaultKinesisClient,
+        stream_name: String,
+        puts_threads: usize,
+    ) -> (
+        std::sync::mpsc::SyncSender<Vec<PutRecordsRequestEntry>>,
+        Vec<std::thread::JoinHandle<()>>,
+    ) {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
+
+        let workers: Vec<std::thread::JoinHandle<()>> = (0..puts_threads)
+            .map(|_| {
+                let rx = rx.clone();
+                let stream_name = stream_name.clone();
+                let client = client.clone();
+
+                std::thread::spawn(move || {
+                    info!("spawning worker thread");
+                    loop {
+                        let recv_res = { rx.lock().unwrap().recv() };
+                        match recv_res {
+                            Ok(batch) => {
+                                let put_res = client
+                                    .put_records(&PutRecordsInput {
+                                        records: batch,
+                                        stream_name: stream_name.clone(),
+                                    })
+                                    .sync();
+                                info!("put_res is ok {:?}", put_res.is_ok());
+                            }
+                            Err(e) => {
+                                error!("error receiving: {:?}", e);
+                                break;
+                            }
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        (tx, workers)
+    }
+
     fn run(
         &mut self,
         kinesis_client: DefaultKinesisClient,
@@ -245,6 +293,9 @@ impl SyslogClient {
         let mut recs: Vec<PutRecordsRequestEntry> = Vec::with_capacity(capacity);
 
         let mut counter = 0;
+
+        let writer_threads = 10;
+        let (tx, workers) = self.spawn_kinesis_pipeline_threadpool(kinesis_client,stream_name,writer_threads);
 
         for maybe_line in bufr.lines() {
             let line: String = maybe_line?;
@@ -259,38 +310,12 @@ impl SyslogClient {
             counter += 1;
 
             recs.push(PutRecordsRequestEntry {
-                data: json_vecu8,
+                data: json_vecu8.clone(),
                 explicit_hash_key: None,
-                partition_key: partition_key,
+                partition_key: partition_key.clone(),
             });
-
             if recs.len() >= capacity {
-                let res = kinesis_client
-                    .put_records(&PutRecordsInput {
-                        records: recs.clone(),
-                        stream_name: stream_name.clone(),
-                    })
-                    .sync();
-                match res {
-                    Ok(output) => {
-                        if output.failed_record_count.is_some()
-                            && output.failed_record_count.unwrap() != 0
-                        {
-                            info!(
-                                "failed_record_count={}",
-                                output.failed_record_count.unwrap()
-                            );
-                            for rec in output.records {
-                                if rec.error_message.is_some() {
-                                    info!("failed with {}", rec.error_message.unwrap());
-                                }
-                            }
-                        }
-                    }
-                    Err(err) => {}
-                }
-                //                    .expect("could not write data to kinesis stream");
-
+                tx.send(recs.clone());
                 recs.clear();
             }
         }
