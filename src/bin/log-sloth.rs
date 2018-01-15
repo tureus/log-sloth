@@ -276,6 +276,7 @@ impl SyslogClient {
                             }
                         }
                     }
+                    info!("out of the worker loop");
                 })
             })
             .collect();
