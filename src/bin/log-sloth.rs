@@ -307,7 +307,7 @@ impl SyslogClient {
                     error!("error while reading lines. breaking out. got {:?}", e);
                     break;
                 },
-            }
+            };
             self.bytes_read += line.len();
             self.lines_read += 1;
             let mut log = self.parse_syslog_line(&line[..])?;
