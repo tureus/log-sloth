@@ -25,19 +25,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::process::exit;
 use std::time::Duration;
-use std::str::FromStr;
 
 use nom_syslog::parse_syslog;
 use nom::IResult;
 
 use pretty_bytes::converter::convert;
 
-use futures::{Future, Sink};
-use futures::stream::{futures_unordered, Stream, Wait};
-use rusoto_core::{Region, RusotoFuture};
-use rusoto_core::reactor::{CredentialsProvider, RequestDispatcher, DEFAULT_REACTOR};
-use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsError, PutRecordsInput,
-                     PutRecordsOutput, PutRecordsRequestEntry};
+use rusoto_core::{Region};
+use rusoto_core::reactor::{CredentialsProvider, RequestDispatcher};
+use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsInput,
+                     PutRecordsRequestEntry};
 
 fn main() {
     #[cfg(linux)]
@@ -105,7 +102,7 @@ fn get_kinesis_stream_name(thing: &DefaultKinesisClient) -> io::Result<String> {
 
     let streams = match streams_response.sync() {
         Ok(output) => output,
-        Err(list_err) => {
+        Err(_) => {
             println!("oh no");
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -257,7 +254,9 @@ impl SyslogClient {
                 std::thread::spawn(move || {
                     info!("spawning worker thread");
                     loop {
-                        let recv_res = { rx.lock().unwrap().recv() };
+                        use std::sync::mpsc::TryRecvError;
+
+                        let recv_res = { rx.lock().unwrap().try_recv() };
                         match recv_res {
                             Ok(batch) => {
                                 let put_res = client
@@ -268,8 +267,11 @@ impl SyslogClient {
                                     .sync();
                                 info!("put_res is ok {:?}", put_res.is_ok());
                             }
-                            Err(e) => {
-                                error!("error receiving: {:?}", e);
+                            Err(TryRecvError::Empty) => {
+                                debug!("empty recv... benign!");
+                            },
+                            Err(TryRecvError::Disconnected) => {
+                                info!("sender disconnected. shutting down!");
                                 break;
                             }
                         }
@@ -295,7 +297,7 @@ impl SyslogClient {
         let mut counter = 0;
 
         let writer_threads = 10;
-        let (tx, workers) = self.spawn_kinesis_pipeline_threadpool(kinesis_client,stream_name,writer_threads);
+        let (tx, _) = self.spawn_kinesis_pipeline_threadpool(kinesis_client,stream_name,writer_threads);
 
         for maybe_line in bufr.lines() {
             let line: String = maybe_line?;
@@ -315,7 +317,13 @@ impl SyslogClient {
                 partition_key: partition_key.clone(),
             });
             if recs.len() >= capacity {
-                tx.send(recs.clone());
+                match tx.send(recs.clone()) {
+                    Ok(_) => {},
+                    Err(_) => {
+                        error!("no receivers available... what?");
+                        break
+                    },
+                };
                 recs.clear();
             }
         }
