@@ -268,10 +268,10 @@ impl SyslogClient {
                                 info!("put_res is ok {:?}", put_res.is_ok());
                             }
                             Err(TryRecvError::Empty) => {
-                                debug!("empty recv... benign!");
+                                debug!("empty recv... spurious wakeup? benign!");
                             },
                             Err(TryRecvError::Disconnected) => {
-                                info!("sender disconnected. shutting down!");
+                                debug!("sender disconnected. shutting down!");
                                 break;
                             }
                         }
@@ -301,7 +301,13 @@ impl SyslogClient {
         let (tx, _) = self.spawn_kinesis_pipeline_threadpool(kinesis_client,stream_name,writer_threads);
 
         for maybe_line in bufr.lines() {
-            let line: String = maybe_line?;
+            let line: String = match maybe_line {
+                Ok(l) => l,
+                Err(e) => {
+                    error!("error while reading lines. breaking out. got {:?}", e);
+                    break;
+                },
+            }
             self.bytes_read += line.len();
             self.lines_read += 1;
             let mut log = self.parse_syslog_line(&line[..])?;

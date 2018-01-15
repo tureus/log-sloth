@@ -11,3 +11,9 @@ Running the server:
 Running the stress test:
 
     cargo run --bin stress --release
+
+Performance
+===
+
+  cargo build --release
+  RUST_LOG=info ./target/release/log-sloth server
