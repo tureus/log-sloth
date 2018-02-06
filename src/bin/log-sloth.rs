@@ -384,7 +384,10 @@ impl SyslogClient {
                     message: Some(datum.msg.into()),
                 });
             }
-            IResult::Incomplete(_) => panic!("incomplete!"),
+            IResult::Incomplete(a) => {
+                error!("incomplete: {:?}", a);
+                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "incomplete parse"))
+            },
             IResult::Error(e) => {
                 println!("error: {:?}", e);
                 return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "bad data"));
