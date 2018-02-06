@@ -324,6 +324,8 @@ impl SyslogClient {
         let mut counter = 0;
 
         let writer_threads = 10;
+        use futures::Sink;
+        let mut kinesis_wait = kinesis_stream.wait();
 
         for maybe_line in bufr.lines() {
             let line: String = match maybe_line {
@@ -350,18 +352,13 @@ impl SyslogClient {
             };
             use futures::{ Sink, Future, AsyncSink };
 
-            loop {
-                match kinesis_stream.poll_ready() {
-                    Ok(_) => { debug!("poll_ready success"); break }
-                    Err(e) => { debug!("poll_ready error: {:?}",e); thread::sleep(Duration::from_millis(1)); continue }
-                }
-            }
-            match kinesis_stream.try_send(record) {
+
+            match kinesis_wait.send(record) {
                  Ok(()) => {
-                     debug!("try_send succeeded")
+                     debug!("Wait#send succeeded")
                  },
                 Err(e) => {
-                    error!("try_send error {:?}", e)
+                    error!("Wait#send error {:?}", e)
                 }
             }
         }
