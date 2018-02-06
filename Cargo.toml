@@ -18,10 +18,6 @@ rusoto_kinesis = { git = "https://github.com/rusoto/rusoto", branch = "master" }
 prctl = "*"
 futures = "*"
 tokio-core = "*"
-tokio-io = "*"
-tokio-proto = "*"
-tokio-service = "*"
-bytes = "*"
 time = "*"
 
 [profile.release]
