@@ -38,16 +38,16 @@ use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsInput,
 
 fn main() {
     #[cfg(linux)]
-        prctl::set_name("log-sloth main thread").unwrap();
+    prctl::set_name("log-sloth main thread").unwrap();
 
-    env_logger::init();
+    env_logger::init().unwrap();
 
     if env::var("USER").unwrap() == "root"
         && (env::var("AWS_ACCESS_KEY_ID").is_err() || env::var("AWS_SECRET_ACCESS_KEY").is_err())
-        {
-            error!("if running as root, must set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY");
-            std::process::exit(1);
-        }
+    {
+        error!("if running as root, must set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY");
+        std::process::exit(1);
+    }
 
     let args: Vec<String> = env::args().collect();
 
@@ -67,7 +67,18 @@ fn main() {
     match &args[1][..] {
         "server" => {
             let mut server = SyslogServer::new(running.clone());
-            server.run().expect("syslog server died");
+            match server.run() {
+                Ok(_) => {
+                    info!("server shutdown happily");
+                }
+                Err(err) => {
+                    if err.description() == "not connected" {
+                        info!("server shutdown happily");
+                    } else {
+                        error!("server shutdown was NOT happy: {:?}", err.description());
+                    }
+                }
+            }
         }
         "client" => unimplemented!(),
         other => {
@@ -77,7 +88,7 @@ fn main() {
 
     info!("Waiting for Ctrl-C...");
     while running.load(Ordering::SeqCst) {}
-    info!("Received Ctrl-C. Exiting...");
+    debug!("Got it! Exiting...");
 
     ()
 }
@@ -161,22 +172,19 @@ impl SyslogServer {
                             continue;
                         }
                     };
-
-                    let stream_name = stream_name.clone();
-                    let kinesis_client = self.kinesis_client.clone();
+                    let kclient_clone = self.kinesis_client.clone();
+                    let stream_name_clone = stream_name.clone();
                     thread::spawn(move || {
-                        let tx = kinesis_tx(kinesis_client, stream_name, 10000);
-
                         info!("STARTING: thread for client {:?}", client);
                         #[cfg(linux)]
-                            {
-                                let name = format!(
-                                    "log-sloth client thread ({:?})",
-                                    client.stream.peer_addr()
-                                );
-                                prctl::set_name(&name[..]).unwrap();
-                            }
-                        let res = client.run(tx.clone());
+                        {
+                            let name = format!(
+                                "log-sloth client thread ({:?})",
+                                client.stream.peer_addr()
+                            );
+                            prctl::set_name(&name[..]).unwrap();
+                        }
+                        let res = client.run(kclient_clone, stream_name_clone);
                         info!("STOPPING: thread for client ending with {:?}", res);
                     });
                 }
@@ -195,40 +203,6 @@ impl SyslogServer {
 
         Ok(())
     }
-}
-
-type RecordsChannel = futures::sync::mpsc::Sender<rusoto_kinesis::PutRecordsRequestEntry>;
-
-pub fn kinesis_tx(kinesis_client: DefaultKinesisClient, stream_name: String, buffer: usize) -> RecordsChannel {
-    use futures::sync::mpsc::{channel, spawn};
-    use futures::{Future, Sink, Stream};
-    use futures::stream::Sender;
-
-    let (mut tx, mut rx) = channel(buffer);
-    let client = Arc::new(KinesisClient::simple(Region::UsWest2));
-
-    std::thread::spawn(move || {
-        let puts = rx.chunks(500).map(|batch: Vec<PutRecordsRequestEntry>| {
-            client.put_records(&PutRecordsInput {
-                records: batch,
-                stream_name: stream_name.clone(),
-            }).then(|put_res| Ok(put_res))
-        }).buffer_unordered(1500);
-
-        for put_res in puts.wait() {
-            if let Ok(Ok(put)) = put_res {
-                if let Some(failed) = put.failed_record_count {
-                    if failed > 0 {
-                        error!("more than one record failed to commit to kinesis");
-                    }
-                }
-                info!("neat, I got {:?}", put);
-
-            }
-        }
-    });
-
-    return tx
 }
 
 //#[derive(Clone)]
@@ -312,9 +286,9 @@ impl SyslogClient {
 
     fn run(
         &mut self,
-        kinesis_stream: RecordsChannel,
+        kinesis_client: DefaultKinesisClient,
+        stream_name: String,
     ) -> Result<(), io::Error> {
-        let mut kinesis_stream = kinesis_stream;
         let addr = self.stream.peer_addr()?;
         let bufr = BufReader::with_capacity(4 * 1024, &self.stream);
 
@@ -324,6 +298,8 @@ impl SyslogClient {
         let mut counter = 0;
 
         let writer_threads = 10;
+        let (tx, _) =
+            self.spawn_kinesis_pipeline_threadpool(kinesis_client, stream_name, writer_threads);
 
         for maybe_line in bufr.lines() {
             let line: String = match maybe_line {
@@ -343,26 +319,20 @@ impl SyslogClient {
             let partition_key = format!("{}", counter);
             counter += 1;
 
-            let record = PutRecordsRequestEntry {
+            recs.push(PutRecordsRequestEntry {
                 data: json_vecu8.clone(),
                 explicit_hash_key: None,
                 partition_key: partition_key.clone(),
-            };
-            use futures::{ Sink, Future, AsyncSink };
-
-            loop {
-                match kinesis_stream.poll_ready() {
-                    Ok(_) => { debug!("poll_ready success"); break }
-                    Err(e) => { debug!("poll_ready error: {:?}",e); thread::sleep(Duration::from_millis(1)); continue }
-                }
-            }
-            match kinesis_stream.try_send(record) {
-                 Ok(()) => {
-                     debug!("try_send succeeded")
-                 },
-                Err(e) => {
-                    error!("try_send error {:?}", e)
-                }
+            });
+            if recs.len() >= capacity {
+                match tx.send(recs.clone()) {
+                    Ok(_) => {}
+                    Err(_) => {
+                        error!("no receivers available... what?");
+                        break;
+                    }
+                };
+                recs.clear();
             }
         }
 

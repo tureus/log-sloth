@@ -9,7 +9,7 @@ use std::thread::JoinHandle;
 use std::env::args_os;
 
 fn main() {
-    env_logger::init().unwrap();
+    env_logger::init();
     let args: Vec<String> = std::env::args().collect();
 
     let mut arg_iter = args.iter();

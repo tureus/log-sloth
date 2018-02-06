@@ -13,10 +13,16 @@ nom = "*"
 log = "*"
 env_logger = "*"
 pretty-bytes = "*"
-rusoto_core = { git = "https://github.com/srijs/rusoto-async", branch = "master" } # "*"
-rusoto_kinesis = { git = "https://github.com/srijs/rusoto-async", branch = "master" } # "*"
+rusoto_core = { git = "https://github.com/rusoto/rusoto", branch = "master" }
+rusoto_kinesis = { git = "https://github.com/rusoto/rusoto", branch = "master" }
 prctl = "*"
 futures = "*"
+tokio-core = "*"
+tokio-io = "*"
+tokio-proto = "*"
+tokio-service = "*"
+bytes = "*"
+time = "*"
 
 [profile.release]
 lto = true
