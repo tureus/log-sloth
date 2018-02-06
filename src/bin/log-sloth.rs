@@ -219,7 +219,7 @@ pub fn kinesis_tx(kinesis_client: DefaultKinesisClient, stream_name: String, buf
             if let Ok(Ok(put)) = put_res {
                 if let Some(failed) = put.failed_record_count {
                     if failed > 0 {
-                        error!("more than one record failed to commit to kinesis");
+                        error!("more than one record failed to commit to kinesis: {:?}", put);
                     }
                 }
                 info!("neat, I got {:?}", put);
