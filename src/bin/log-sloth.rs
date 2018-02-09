@@ -1,3 +1,5 @@
+extern crate docopt;
+
 extern crate ctrlc;
 extern crate nom;
 extern crate nom_syslog;
@@ -26,6 +28,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::process::exit;
 use std::time::Duration;
 
+use docopt::Docopt;
+
 use nom_syslog::parse_syslog;
 use nom::IResult;
 
@@ -34,11 +38,34 @@ use pretty_bytes::converter::convert;
 use rusoto_core::Region;
 use rusoto_core::reactor::{CredentialsProvider, RequestDispatcher};
 use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsInput,
-                     PutRecordsRequestEntry};
+                     PutRecordsRequestEntry, PutRecordsOutput, PutRecordsError};
+
+const USAGE: &'static str = "
+log-sloth.
+
+Usage:
+  log-sloth --concurrency=N
+  log-sloth (-h | --help)
+  log-sloth --version
+
+Options:
+  -h --help     Show this screen.
+  --version     Show version.
+  --concurrency=<kn>  connections to Kinesis per client [default: 10]
+";
+
+#[derive(Debug, Deserialize)]
+struct Args {
+    pub flag_concurrency: usize,
+}
 
 fn main() {
     #[cfg(linux)]
         prctl::set_name("log-sloth main thread").unwrap();
+
+    let args: Args = Docopt::new(USAGE)
+        .and_then(|d| d.deserialize())
+        .unwrap_or_else(|e| e.exit());
 
     env_logger::init();
 
@@ -49,13 +76,6 @@ fn main() {
             std::process::exit(1);
         }
 
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() < 2 {
-        error!("must set action to 'server' or 'client'");
-        exit(1)
-    }
-
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
     ctrlc::set_handler(move || {
@@ -63,17 +83,8 @@ fn main() {
         r.store(false, Ordering::SeqCst);
     }).expect("Error setting Ctrl-C handler");
 
-    debug!("now starting up stuff...");
-    match &args[1][..] {
-        "server" => {
-            let mut server = SyslogServer::new(running.clone());
-            server.run().expect("syslog server died");
-        }
-        "client" => unimplemented!(),
-        other => {
-            error!("we don't handle {:?}, use 'server' or 'client'", other);
-        }
-    };
+    let mut server = SyslogServer::new(running.clone(), args.flag_concurrency);
+    server.run().expect("syslog server died");
 
     info!("Waiting for Ctrl-C...");
     while running.load(Ordering::SeqCst) {}
@@ -92,7 +103,6 @@ fn get_kinesis_stream_name(thing: &DefaultKinesisClient) -> io::Result<String> {
     let streams = match streams_response.sync() {
         Ok(output) => output,
         Err(_) => {
-            println!("oh no");
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "could not list Kinesis streams",
@@ -117,10 +127,11 @@ pub struct SyslogServer {
     pub streams: Vec<TcpStream>,
     pub listener: Option<TcpListener>,
     pub kinesis_client: DefaultKinesisClient,
+    pub concurrency: usize,
 }
 
 impl SyslogServer {
-    fn new(running: Arc<AtomicBool>) -> Self {
+    fn new(running: Arc<AtomicBool>, concurrency: usize) -> Self {
         let kinesis = KinesisClient::simple(Region::UsWest2);
 
         Self {
@@ -128,6 +139,7 @@ impl SyslogServer {
             streams: vec![],
             listener: None,
             kinesis_client: Arc::new(kinesis),
+            concurrency: concurrency,
         }
     }
 
@@ -143,6 +155,8 @@ impl SyslogServer {
     }
 
     fn run(&mut self) -> io::Result<()> {
+        info!("starting log sloth server");
+        info!("concurrency={}", self.concurrency);
         let listener = TcpListener::bind("0.0.0.0:1516")?;
         listener.set_nonblocking(true)?;
 
@@ -164,8 +178,9 @@ impl SyslogServer {
 
                     let stream_name = stream_name.clone();
                     let kinesis_client = self.kinesis_client.clone();
+                    let inflight = self.concurrency;
                     thread::spawn(move || {
-                        let tx = kinesis_tx(kinesis_client, stream_name, 10000);
+                        let tx = kinesis_tx(kinesis_client, stream_name, 1, inflight);
 
                         info!("STARTING: thread for client {:?}", client);
                         #[cfg(linux)]
@@ -184,7 +199,7 @@ impl SyslogServer {
                     thread::sleep(Duration::from_millis(10));
                 }
                 Err(ref e) => {
-                    println!("not sure how to handle {:?}", e);
+                    error!("not sure how to handle {:?}", e);
                 }
             }
 
@@ -199,30 +214,89 @@ impl SyslogServer {
 
 type RecordsChannel = futures::sync::mpsc::Sender<rusoto_kinesis::PutRecordsRequestEntry>;
 
-pub fn kinesis_tx(kinesis_client: DefaultKinesisClient, stream_name: String, buffer: usize) -> RecordsChannel {
+pub fn kinesis_tx(kinesis_client: DefaultKinesisClient, stream_name: String, chan_buf: usize, inflight: usize) -> RecordsChannel {
     use futures::sync::mpsc::{channel, spawn};
     use futures::{Future, Sink, Stream};
     use futures::stream::Sender;
 
-    let (mut tx, mut rx) = channel(buffer);
+    let (mut tx, mut rx) = channel(chan_buf);
     let client = Arc::new(KinesisClient::simple(Region::UsWest2));
 
+    let mut retry_tx = tx.clone().wait();
     std::thread::spawn(move || {
         let puts = rx.chunks(500).map(|batch: Vec<PutRecordsRequestEntry>| {
-            client.put_records(&PutRecordsInput {
+            let input = PutRecordsInput {
                 records: batch,
                 stream_name: stream_name.clone(),
-            }).then(|put_res| Ok(put_res))
-        }).buffer_unordered(1500);
+            };
+            //  : futures::Then<rusoto_core::RusotoFuture<PutRecordsOutput,(PutRecordsError,usize)>, Result<(usize,usize),(usize,usize)>, _>
+            let chain = client.put_records(&input).then(|put_res| {
+                let retval : Result<Result<PutRecordsOutput,(PutRecordsError,PutRecordsInput)>,()> = match put_res {
+                    Ok(res) => {
+                        trace!("match put_res: it worked");
+                        Ok(Ok(res))
+                    },
+                    Err(err) => {
+                        trace!("match put_res: failed");
+                        Ok(Err((err,input)))
+                    }
+                };
+                retval
+            });
+            chain
+        }).buffer_unordered(inflight);
 
         for put_res in puts.wait() {
-            if let Ok(Ok(put)) = put_res {
-                if let Some(failed) = put.failed_record_count {
-                    if failed > 0 {
-                        error!("more than one record failed to commit to kinesis: {:?}", put);
+            match put_res {
+                Ok(Ok(put)) => {
+                    if let Some(failed) = put.failed_record_count {
+                        if failed > 0 {
+                            error!("{} record(s) failed to commit to kinesis", failed);
+                            let put: PutRecordsOutput = put;
+                            for rec in put.records {
+                                if rec.error_code.is_some() {
+                                    error!("failed record: {:?}", rec);
+                                }
+                            }
+                        }
                     }
+                },
+                Ok(Err((put_records_err,put_records_input))) => {
+                    match put_records_err {
+                        PutRecordsError::HttpDispatch(dispatch_err) => {
+                            error!("http dispatch error: {:?}. retrying records...", dispatch_err);
+                            for record in put_records_input.records {
+                                match retry_tx.send(record) {
+                                    Ok(()) => {
+                                        debug!("Wait#send succeeded")
+                                    },
+                                    Err(e) => {
+                                        error!("Wait#send error {:?}", e)
+                                    }
+                                }
+                            }
+                        },
+                        PutRecordsError::Unknown(raw_message) => {
+                            error!("unknown error: '{:?}', retrying records...", raw_message);
+                            for record in put_records_input.records {
+                                match retry_tx.send(record) {
+                                    Ok(()) => {
+                                        debug!("Wait#send succeeded")
+                                    },
+                                    Err(e) => {
+                                        error!("Wait#send error {:?}", e)
+                                    }
+                                }
+                            }
+                        }
+                        other => {
+                            error!("unhandled kinesis error: {:?}", other);
+                        }
+                    }
+                },
+                other => {
+                    error!("puts.wait() fallthrough: {:?}", other);
                 }
-                info!("neat, I got {:?}", put);
 
             }
         }
@@ -257,57 +331,6 @@ impl SyslogClient {
 
     fn shutdown(&self) -> io::Result<()> {
         self.stream.shutdown(Shutdown::Both)
-    }
-
-    fn spawn_kinesis_pipeline_threadpool(
-        &self,
-        client: DefaultKinesisClient,
-        stream_name: String,
-        puts_threads: usize,
-    ) -> (
-        std::sync::mpsc::SyncSender<Vec<PutRecordsRequestEntry>>,
-        Vec<std::thread::JoinHandle<()>>,
-    ) {
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
-
-        let workers: Vec<std::thread::JoinHandle<()>> = (0..puts_threads)
-            .map(|_| {
-                let rx = rx.clone();
-                let stream_name = stream_name.clone();
-                let client = client.clone();
-
-                std::thread::spawn(move || {
-                    info!("spawning worker thread");
-                    loop {
-                        use std::sync::mpsc::TryRecvError;
-
-                        let recv_res = { rx.lock().unwrap().try_recv() };
-                        match recv_res {
-                            Ok(batch) => {
-                                let put_res = client
-                                    .put_records(&PutRecordsInput {
-                                        records: batch,
-                                        stream_name: stream_name.clone(),
-                                    })
-                                    .sync();
-                                info!("put_res is ok {:?}", put_res.is_ok());
-                            }
-                            Err(TryRecvError::Empty) => {
-                                debug!("empty recv... spurious wakeup? benign!");
-                            }
-                            Err(TryRecvError::Disconnected) => {
-                                debug!("sender disconnected. shutting down!");
-                                break;
-                            }
-                        }
-                    }
-                    info!("out of the worker loop");
-                })
-            })
-            .collect();
-
-        (tx, workers)
     }
 
     fn run(
@@ -376,7 +399,6 @@ impl SyslogClient {
         let res: IResult<&'a str, nom_syslog::Syslog3164Message<'a>> = parse_syslog(line);
         match res {
             IResult::Done(_, datum) => {
-                // println!("datum: {:?}", datum);
                 return Ok(Log {
                     app: String::new(),
                     sender_ip: None,
@@ -389,7 +411,7 @@ impl SyslogClient {
                 return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "incomplete parse"))
             },
             IResult::Error(e) => {
-                println!("error: {:?}", e);
+                error!("error: {:?}", e);
                 return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "bad data"));
             }
         }

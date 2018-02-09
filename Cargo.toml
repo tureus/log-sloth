@@ -19,7 +19,8 @@ prctl = "*"
 futures = "*"
 tokio-core = "*"
 time = "*"
+docopt = "0.8"
 
 [profile.release]
-lto = true
+# lto = true
 debug = true
