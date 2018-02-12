@@ -12,6 +12,7 @@ extern crate serde_json;
 extern crate futures;
 extern crate rusoto_core;
 extern crate rusoto_kinesis;
+extern crate openssl_probe;
 
 extern crate prctl;
 
@@ -60,6 +61,8 @@ struct Args {
 }
 
 fn main() {
+    openssl_probe::init_ssl_cert_env_vars();
+
     #[cfg(linux)]
         prctl::set_name("log-sloth main thread").unwrap();
 
@@ -102,10 +105,10 @@ fn get_kinesis_stream_name(thing: &DefaultKinesisClient) -> io::Result<String> {
 
     let streams = match streams_response.sync() {
         Ok(output) => output,
-        Err(_) => {
+        Err(e) => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "could not list Kinesis streams",
+                format!("could not list Kinesis streams: {:?}", e),
             ));
         }
     };
@@ -341,12 +344,8 @@ impl SyslogClient {
         let addr = self.stream.peer_addr()?;
         let bufr = BufReader::with_capacity(4 * 1024, &self.stream);
 
-        let capacity = 500;
-        let mut recs: Vec<PutRecordsRequestEntry> = Vec::with_capacity(capacity);
-
         let mut counter = 0;
 
-        let writer_threads = 10;
         use futures::Sink;
         let mut kinesis_wait = kinesis_stream.wait();
 
@@ -374,7 +373,6 @@ impl SyslogClient {
                 partition_key: partition_key.clone(),
             };
             use futures::{ Sink, Future, AsyncSink };
-
 
             match kinesis_wait.send(record) {
                  Ok(()) => {

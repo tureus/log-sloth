@@ -1,0 +1,24 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: pipeline
+  namespace: default
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  template:
+    metadata:
+      labels:
+        app: log-sloth
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+      - name: log-sloth
+        image: sample/repo:latest
+        command: ["log-sloth", "--concurrency=500"]
+        ports:
+        - name: tcp-win
+          containerPort: 1515
+        securityContext:
+          capabilities:
+            add: ["NET_BIND_SERVICE", "NET_BROADCAST", "NET_RAW", "DAC_READ_SEARCH", "DAC_OVERRIDE", "CHOWN", "SYSLOG"]
