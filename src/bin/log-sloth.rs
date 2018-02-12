@@ -341,12 +341,8 @@ impl SyslogClient {
         let addr = self.stream.peer_addr()?;
         let bufr = BufReader::with_capacity(4 * 1024, &self.stream);
 
-        let capacity = 500;
-        let mut recs: Vec<PutRecordsRequestEntry> = Vec::with_capacity(capacity);
-
         let mut counter = 0;
 
-        let writer_threads = 10;
         use futures::Sink;
         let mut kinesis_wait = kinesis_stream.wait();
 
@@ -374,7 +370,6 @@ impl SyslogClient {
                 partition_key: partition_key.clone(),
             };
             use futures::{ Sink, Future, AsyncSink };
-
 
             match kinesis_wait.send(record) {
                  Ok(()) => {
