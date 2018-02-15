@@ -21,6 +21,8 @@ tokio-core = "*"
 time = "*"
 docopt = "0.8"
 openssl-probe = "0.1.2"
+hostname = "0.1"
+hyper = "*"
 
 [profile.release]
 lto = true

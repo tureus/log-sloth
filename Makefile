@@ -6,11 +6,14 @@ TAG := latest
 build:
 	docker build -t $(REPO):$(TAG) .
 
-push:
+push: build
 	docker push $(REPO):$(TAG)
 
 create:
 	kubectl create -f docker/log-sloth-deployment.yml
+
+deploy: push
+	kubectl set image deploy/log-sloth log-sloth=$(REPO):$(TAG)
 
 login:
 	aws ecr get-login --no-include-email | sh

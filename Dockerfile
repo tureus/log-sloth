@@ -17,7 +17,7 @@ RUN cargo build --release
 
 # Now, we need to build our _real_ Docker container, copying in `using-diesel`.
 FROM alpine:latest
-RUN apk --no-cache add ca-certificates
+RUN apk --no-cache add ca-certificates htop
 COPY --from=builder \
     /home/rust/src/target/x86_64-unknown-linux-musl/release/log-sloth \
     /usr/local/bin/

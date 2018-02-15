@@ -1,3 +1,13 @@
+extern crate hostname;
+#[macro_use]
+extern crate log;
+
+extern crate futures;
+extern crate hyper;
+extern crate tokio_core;
+
+pub mod stats;
+
 #[allow(dead_code)]
 fn extract_kv(input: &str) -> Vec<Vec<String>> {
     input

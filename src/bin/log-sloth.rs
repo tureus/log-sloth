@@ -20,6 +20,8 @@ extern crate env_logger;
 #[macro_use]
 extern crate log;
 
+extern crate log_sloth;
+
 use std::{env, io, thread};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::io::{BufRead, BufReader};
@@ -39,23 +41,29 @@ use rusoto_core::reactor::{CredentialsProvider, RequestDispatcher};
 use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsError, PutRecordsInput,
                      PutRecordsOutput, PutRecordsRequestEntry};
 
-const USAGE: &'static str = "
+use log_sloth::stats::Stats;
+
+const USAGE: &str = "
 log-sloth.
 
 Usage:
-  log-sloth --concurrency=N
+  log-sloth [--concurrency=N] [--enable-stats [--influxdb-url=URL]]
   log-sloth (-h | --help)
   log-sloth --version
 
 Options:
-  -h --help     Show this screen.
-  --version     Show version.
-  --concurrency=<kn>  connections to Kinesis per client [default: 10]
+  -h --help             Show this screen.
+  --version             Show version.
+  --concurrency=<kn>    Connections to Kinesis per client [default: 10]
+  --enable-stats        Send stats to InfluxDB backend
+  --influxdb-url=<url>  Target InfluxDB server [default: http://127.0.0.1:8086/write?db=telegraf]
 ";
 
 #[derive(Debug, Deserialize)]
 struct Args {
     pub flag_concurrency: usize,
+    pub flag_influxdb_url: String,
+    pub flag_enable_stats: bool,
 }
 
 fn main() {
@@ -85,7 +93,7 @@ fn main() {
     }).expect("Error setting Ctrl-C handler");
 
     let mut server = SyslogServer::new(running.clone(), args.flag_concurrency);
-    server.run().expect("syslog server died");
+    server.run(args).expect("syslog server died");
 
     info!("Waiting for Ctrl-C...");
     while running.load(Ordering::SeqCst) {}
@@ -156,7 +164,7 @@ impl SyslogServer {
         Ok(SyslogClient::new(stream, self.running.clone()))
     }
 
-    fn run(&mut self) -> io::Result<()> {
+    fn run(&mut self, args: Args) -> io::Result<()> {
         info!("starting log sloth server");
         info!("concurrency={}", self.concurrency);
         let listener = TcpListener::bind("0.0.0.0:1516")?;
@@ -164,9 +172,20 @@ impl SyslogServer {
 
         let stream_name = get_kinesis_stream_name(&self.kinesis_client)?;
 
+        let stats = if args.flag_enable_stats {
+            let (stats, _stats_thread) = Stats::spawn_thread(args.flag_influxdb_url);
+            Some(stats)
+        } else {
+            None
+        };
+
         loop {
             match listener.accept() {
                 Ok((stream, _)) => {
+                    if let Some(ref stats) = stats {
+                        stats.clients.fetch_add(1, Ordering::Relaxed);
+                    }
+
                     stream
                         .set_nonblocking(false)
                         .expect("Could not set nonblocking mode on client stream");
@@ -184,6 +203,7 @@ impl SyslogServer {
                         let tx = kinesis_tx(stream_name, 1, inflight);
 
                         info!("STARTING: thread for client {:?}", client);
+
                         #[cfg(linux)]
                         {
                             let name = format!(
@@ -216,6 +236,7 @@ impl SyslogServer {
 type RecordsChannel = futures::sync::mpsc::Sender<rusoto_kinesis::PutRecordsRequestEntry>;
 
 pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize) -> RecordsChannel {
+    info!("CREATING kinesis channel");
     use futures::sync::mpsc::channel;
     use futures::{Future, Sink, Stream};
 
@@ -224,6 +245,7 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize) -> Reco
 
     let mut retry_tx = tx.clone().wait();
     std::thread::spawn(move || {
+        info!("STARTING kinesis batch put thread");
         let puts = rx.chunks(500)
             .map(|batch: Vec<PutRecordsRequestEntry>| {
                 let input = PutRecordsInput {
@@ -231,7 +253,7 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize) -> Reco
                     stream_name: stream_name.clone(),
                 };
                 //  : futures::Then<rusoto_core::RusotoFuture<PutRecordsOutput,(PutRecordsError,usize)>, Result<(usize,usize),(usize,usize)>, _>
-                let chain = client.put_records(&input).then(|put_res| {
+                client.put_records(&input).then(|put_res| {
                     let retval: Result<
                         Result<PutRecordsOutput, (PutRecordsError, PutRecordsInput)>,
                         (),
@@ -246,8 +268,7 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize) -> Reco
                         }
                     };
                     retval
-                });
-                chain
+                })
             })
             .buffer_unordered(inflight);
 
@@ -297,9 +318,10 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize) -> Reco
                 }
             }
         }
+        info!("STOPPING kinesis batch put thread");
     });
 
-    return tx;
+    tx
 }
 
 //#[derive(Clone)]
@@ -337,12 +359,10 @@ impl SyslogClient {
         let addr = self.stream.peer_addr()?;
         let bufr = BufReader::with_capacity(4 * 1024, &self.stream);
 
-        let mut counter = 0;
-
         use futures::Sink;
         let mut kinesis_wait = kinesis_stream.wait();
 
-        for maybe_line in bufr.lines() {
+        for (counter, maybe_line) in bufr.lines().enumerate() {
             let line: String = match maybe_line {
                 Ok(l) => l,
                 Err(e) => {
@@ -353,12 +373,11 @@ impl SyslogClient {
             self.bytes_read += line.len();
             self.lines_read += 1;
             let mut log = self.parse_syslog_line(&line[..])?;
-            log.sender_ip = Some(addr.clone());
+            log.sender_ip = Some(addr);
 
             let json_vecu8 = serde_json::to_vec(&log)?;
 
             let partition_key = format!("{}", counter);
-            counter += 1;
 
             let record = PutRecordsRequestEntry {
                 data: json_vecu8.clone(),
@@ -384,24 +403,22 @@ impl SyslogClient {
     fn parse_syslog_line<'a>(&self, line: &'a str) -> Result<Log<'a>, io::Error> {
         let res: IResult<&'a str, nom_syslog::Syslog3164Message<'a>> = parse_syslog(line);
         match res {
-            IResult::Done(_, datum) => {
-                return Ok(Log {
-                    app: String::new(),
-                    sender_ip: None,
-                    kv: None,
-                    message: Some(datum.msg.into()),
-                });
-            }
+            IResult::Done(_, datum) => Ok(Log {
+                app: String::new(),
+                sender_ip: None,
+                kv: None,
+                message: Some(datum.msg),
+            }),
             IResult::Incomplete(a) => {
                 error!("incomplete: {:?}", a);
-                return Err(io::Error::new(
+                Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "incomplete parse",
-                ));
+                ))
             }
             IResult::Error(e) => {
                 error!("error: {:?}", e);
-                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "bad data"));
+                Err(io::Error::new(io::ErrorKind::UnexpectedEof, "bad data"))
             }
         }
     }
