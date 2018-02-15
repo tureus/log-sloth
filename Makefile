@@ -4,6 +4,11 @@ REPO := $(shell aws ecr describe-repositories | jq -r '.repositories | map(selec
 TAG := latest
 
 build:
+	docker build -t $(REPO):$(TAG) .
+
+push: build
+	docker push $(REPO):$(TAG)
+
 login:
 	aws ecr get-login --no-include-email | sh
 
