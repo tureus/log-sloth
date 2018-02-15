@@ -10,9 +10,9 @@ extern crate serde_derive;
 extern crate serde_json;
 
 extern crate futures;
+extern crate openssl_probe;
 extern crate rusoto_core;
 extern crate rusoto_kinesis;
-extern crate openssl_probe;
 
 extern crate prctl;
 
@@ -21,12 +21,10 @@ extern crate env_logger;
 extern crate log;
 
 use std::{env, io, thread};
-use std::error::Error;
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::process::exit;
 use std::time::Duration;
 
 use docopt::Docopt;
@@ -38,8 +36,8 @@ use pretty_bytes::converter::convert;
 
 use rusoto_core::Region;
 use rusoto_core::reactor::{CredentialsProvider, RequestDispatcher};
-use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsInput,
-                     PutRecordsRequestEntry, PutRecordsOutput, PutRecordsError};
+use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsError, PutRecordsInput,
+                     PutRecordsOutput, PutRecordsRequestEntry};
 
 const USAGE: &'static str = "
 log-sloth.
@@ -64,7 +62,7 @@ fn main() {
     openssl_probe::init_ssl_cert_env_vars();
 
     #[cfg(linux)]
-        prctl::set_name("log-sloth main thread").unwrap();
+    prctl::set_name("log-sloth main thread").unwrap();
 
     let args: Args = Docopt::new(USAGE)
         .and_then(|d| d.deserialize())
@@ -74,10 +72,10 @@ fn main() {
 
     if env::var("USER").unwrap() == "root"
         && (env::var("AWS_ACCESS_KEY_ID").is_err() || env::var("AWS_SECRET_ACCESS_KEY").is_err())
-        {
-            error!("if running as root, must set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY");
-            std::process::exit(1);
-        }
+    {
+        error!("if running as root, must set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY");
+        std::process::exit(1);
+    }
 
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
@@ -146,6 +144,7 @@ impl SyslogServer {
         }
     }
 
+    #[allow(dead_code)]
     fn shutdown(&self) {
         //        self.listener
     }
@@ -180,20 +179,19 @@ impl SyslogServer {
                     };
 
                     let stream_name = stream_name.clone();
-                    let kinesis_client = self.kinesis_client.clone();
                     let inflight = self.concurrency;
                     thread::spawn(move || {
-                        let tx = kinesis_tx(kinesis_client, stream_name, 1, inflight);
+                        let tx = kinesis_tx(stream_name, 1, inflight);
 
                         info!("STARTING: thread for client {:?}", client);
                         #[cfg(linux)]
-                            {
-                                let name = format!(
-                                    "log-sloth client thread ({:?})",
-                                    client.stream.peer_addr()
-                                );
-                                prctl::set_name(&name[..]).unwrap();
-                            }
+                        {
+                            let name = format!(
+                                "log-sloth client thread ({:?})",
+                                client.stream.peer_addr()
+                            );
+                            prctl::set_name(&name[..]).unwrap();
+                        }
                         let res = client.run(tx.clone());
                         info!("STOPPING: thread for client ending with {:?}", res);
                     });
@@ -217,37 +215,41 @@ impl SyslogServer {
 
 type RecordsChannel = futures::sync::mpsc::Sender<rusoto_kinesis::PutRecordsRequestEntry>;
 
-pub fn kinesis_tx(kinesis_client: DefaultKinesisClient, stream_name: String, chan_buf: usize, inflight: usize) -> RecordsChannel {
-    use futures::sync::mpsc::{channel, spawn};
+pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize) -> RecordsChannel {
+    use futures::sync::mpsc::channel;
     use futures::{Future, Sink, Stream};
-    use futures::stream::Sender;
 
-    let (mut tx, mut rx) = channel(chan_buf);
+    let (tx, rx) = channel(chan_buf);
     let client = Arc::new(KinesisClient::simple(Region::UsWest2));
 
     let mut retry_tx = tx.clone().wait();
     std::thread::spawn(move || {
-        let puts = rx.chunks(500).map(|batch: Vec<PutRecordsRequestEntry>| {
-            let input = PutRecordsInput {
-                records: batch,
-                stream_name: stream_name.clone(),
-            };
-            //  : futures::Then<rusoto_core::RusotoFuture<PutRecordsOutput,(PutRecordsError,usize)>, Result<(usize,usize),(usize,usize)>, _>
-            let chain = client.put_records(&input).then(|put_res| {
-                let retval : Result<Result<PutRecordsOutput,(PutRecordsError,PutRecordsInput)>,()> = match put_res {
-                    Ok(res) => {
-                        trace!("match put_res: it worked");
-                        Ok(Ok(res))
-                    },
-                    Err(err) => {
-                        trace!("match put_res: failed");
-                        Ok(Err((err,input)))
-                    }
+        let puts = rx.chunks(500)
+            .map(|batch: Vec<PutRecordsRequestEntry>| {
+                let input = PutRecordsInput {
+                    records: batch,
+                    stream_name: stream_name.clone(),
                 };
-                retval
-            });
-            chain
-        }).buffer_unordered(inflight);
+                //  : futures::Then<rusoto_core::RusotoFuture<PutRecordsOutput,(PutRecordsError,usize)>, Result<(usize,usize),(usize,usize)>, _>
+                let chain = client.put_records(&input).then(|put_res| {
+                    let retval: Result<
+                        Result<PutRecordsOutput, (PutRecordsError, PutRecordsInput)>,
+                        (),
+                    > = match put_res {
+                        Ok(res) => {
+                            trace!("match put_res: it worked");
+                            Ok(Ok(res))
+                        }
+                        Err(err) => {
+                            trace!("match put_res: failed");
+                            Ok(Err((err, input)))
+                        }
+                    };
+                    retval
+                });
+                chain
+            })
+            .buffer_unordered(inflight);
 
         for put_res in puts.wait() {
             match put_res {
@@ -263,54 +265,47 @@ pub fn kinesis_tx(kinesis_client: DefaultKinesisClient, stream_name: String, cha
                             }
                         }
                     }
-                },
-                Ok(Err((put_records_err,put_records_input))) => {
-                    match put_records_err {
-                        PutRecordsError::HttpDispatch(dispatch_err) => {
-                            error!("http dispatch error: {:?}. retrying records...", dispatch_err);
-                            for record in put_records_input.records {
-                                match retry_tx.send(record) {
-                                    Ok(()) => {
-                                        debug!("Wait#send succeeded")
-                                    },
-                                    Err(e) => {
-                                        error!("Wait#send error {:?}", e)
-                                    }
-                                }
-                            }
-                        },
-                        PutRecordsError::Unknown(raw_message) => {
-                            error!("unknown error: '{:?}', retrying records...", raw_message);
-                            for record in put_records_input.records {
-                                match retry_tx.send(record) {
-                                    Ok(()) => {
-                                        debug!("Wait#send succeeded")
-                                    },
-                                    Err(e) => {
-                                        error!("Wait#send error {:?}", e)
-                                    }
-                                }
+                }
+                Ok(Err((put_records_err, put_records_input))) => match put_records_err {
+                    PutRecordsError::HttpDispatch(dispatch_err) => {
+                        error!(
+                            "http dispatch error: {:?}. retrying records...",
+                            dispatch_err
+                        );
+                        for record in put_records_input.records {
+                            match retry_tx.send(record) {
+                                Ok(()) => debug!("Wait#send succeeded"),
+                                Err(e) => error!("Wait#send error {:?}", e),
                             }
                         }
-                        other => {
-                            error!("unhandled kinesis error: {:?}", other);
+                    }
+                    PutRecordsError::Unknown(raw_message) => {
+                        error!("unknown error: '{:?}', retrying records...", raw_message);
+                        for record in put_records_input.records {
+                            match retry_tx.send(record) {
+                                Ok(()) => debug!("Wait#send succeeded"),
+                                Err(e) => error!("Wait#send error {:?}", e),
+                            }
                         }
+                    }
+                    other => {
+                        error!("unhandled kinesis error: {:?}", other);
                     }
                 },
                 other => {
                     error!("puts.wait() fallthrough: {:?}", other);
                 }
-
             }
         }
     });
 
-    return tx
+    return tx;
 }
 
 //#[derive(Clone)]
 pub struct SyslogClient {
     stream: TcpStream,
+    #[allow(dead_code)]
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
     lines_read: usize,
     bytes_read: usize,
@@ -332,15 +327,13 @@ impl SyslogClient {
         }
     }
 
+    #[allow(dead_code)]
     fn shutdown(&self) -> io::Result<()> {
         self.stream.shutdown(Shutdown::Both)
     }
 
-    fn run(
-        &mut self,
-        kinesis_stream: RecordsChannel,
-    ) -> Result<(), io::Error> {
-        let mut kinesis_stream = kinesis_stream;
+    fn run(&mut self, kinesis_stream: RecordsChannel) -> Result<(), io::Error> {
+        let kinesis_stream = kinesis_stream;
         let addr = self.stream.peer_addr()?;
         let bufr = BufReader::with_capacity(4 * 1024, &self.stream);
 
@@ -372,15 +365,10 @@ impl SyslogClient {
                 explicit_hash_key: None,
                 partition_key: partition_key.clone(),
             };
-            use futures::{ Sink, Future, AsyncSink };
 
             match kinesis_wait.send(record) {
-                 Ok(()) => {
-                     debug!("Wait#send succeeded")
-                 },
-                Err(e) => {
-                    error!("Wait#send error {:?}", e)
-                }
+                Ok(()) => debug!("Wait#send succeeded"),
+                Err(e) => error!("Wait#send error {:?}", e),
             }
         }
 
@@ -406,8 +394,11 @@ impl SyslogClient {
             }
             IResult::Incomplete(a) => {
                 error!("incomplete: {:?}", a);
-                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "incomplete parse"))
-            },
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "incomplete parse",
+                ));
+            }
             IResult::Error(e) => {
                 error!("error: {:?}", e);
                 return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "bad data"));
@@ -420,6 +411,7 @@ pub trait LogProcessor {
     fn process(&self, string: &str) -> Result<Log, io::Error>;
 }
 
+#[allow(dead_code)]
 struct Fortigate {}
 
 impl LogProcessor for Fortigate {

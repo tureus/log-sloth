@@ -3,7 +3,7 @@ extern crate nom;
 extern crate nom_syslog;
 extern crate test;
 
-use nom_syslog::{Syslog3164Message,parse_syslog};
+use nom_syslog::{parse_syslog, Syslog3164Message};
 
 #[bench]
 fn bench_parser(b: &mut test::Bencher) {

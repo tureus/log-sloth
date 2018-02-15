@@ -23,5 +23,5 @@ docopt = "0.8"
 openssl-probe = "0.1.2"
 
 [profile.release]
-# lto = true
-debug = true
+lto = true
+# debug = true

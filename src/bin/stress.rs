@@ -6,7 +6,6 @@ extern crate pretty_bytes;
 use std::net::TcpStream;
 use std::io::Write;
 use std::thread::JoinHandle;
-use std::env::args_os;
 
 fn main() {
     env_logger::init();
@@ -39,7 +38,7 @@ fn main() {
         })
         .collect();
     for h in hs {
-        h.join();
+        h.join().unwrap();
     }
 }
 

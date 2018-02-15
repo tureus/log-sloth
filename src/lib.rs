@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 fn extract_kv(input: &str) -> Vec<Vec<String>> {
     input
         .split_whitespace()
