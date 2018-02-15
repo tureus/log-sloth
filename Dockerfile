@@ -22,3 +22,4 @@ COPY --from=builder \
     /home/rust/src/target/x86_64-unknown-linux-musl/release/log-sloth \
     /usr/local/bin/
 CMD /usr/local/bin/log-sloth
+
