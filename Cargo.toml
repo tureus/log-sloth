@@ -8,7 +8,7 @@ ctrlc = "*"
 serde = "*"
 serde_derive = "*"
 serde_json = "*"
-nom-syslog = "*"
+nom-syslog = { path = "nom-syslog" }
 nom = "*"
 log = "*"
 env_logger = "*"
@@ -20,6 +20,7 @@ futures = "*"
 tokio-core = "*"
 time = "*"
 docopt = "0.8"
+openssl-probe = "0.1.2"
 
 [profile.release]
 # lto = true
