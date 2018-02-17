@@ -28,24 +28,24 @@ impl Stats {
             let client = Client::new(&handle);
 
             loop {
-//                let series = stats.series(&hostname);
-//                let mut request = Request::new(Method::Post, influxdb_uri.clone());
-//                request.set_body(series);
-//                debug!("influxdb request={:?}", request);
-//
-//                let future = client.request(request).and_then(|res| {
-//                    debug!("influxdb response status={}", res.status());
-//                    res.body().concat2()
-//                });
-//
-//                let res = core.run(future).unwrap();
-//
-//                use std::str::from_utf8;
-//                debug!(
-//                    "influxdb response body={}",
-//                    from_utf8(&res.to_owned()).unwrap()
-//                );
-                thread::sleep_ms(500);
+                let series = stats.series(&hostname);
+                let mut request = Request::new(Method::Post, influxdb_uri.clone());
+                request.set_body(series);
+                debug!("influxdb request={:?}", request);
+
+                let future = client.request(request).and_then(|res| {
+                    debug!("influxdb response status={}", res.status());
+                    res.body().concat2()
+                });
+
+                let res = core.run(future).unwrap();
+
+                use std::str::from_utf8;
+                debug!(
+                    "influxdb response body={}",
+                    from_utf8(&res.to_owned()).unwrap()
+                );
+                thread::sleep_ms(15*1000);
             }
         });
 
