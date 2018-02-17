@@ -47,7 +47,7 @@ const USAGE: &str = "
 log-sloth.
 
 Usage:
-  log-sloth [--concurrency=N] [--enable-stats [--influxdb-url=URL]]
+  log-sloth [--concurrency=N] [--disable-retry] [--enable-stats [--influxdb-url=URL]]
   log-sloth (-h | --help)
   log-sloth --version
 
@@ -57,6 +57,7 @@ Options:
   --concurrency=<kn>    Connections to Kinesis per client [default: 10]
   --enable-stats        Send stats to InfluxDB backend
   --influxdb-url=<url>  Target InfluxDB server [default: http://127.0.0.1:8086/write?db=telegraf]
+  --disable-retry       Skip the feedback loop for retrying failed requests
 ";
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +65,7 @@ struct Args {
     pub flag_concurrency: usize,
     pub flag_influxdb_url: String,
     pub flag_enable_stats: bool,
+    pub flag_disable_retry: bool,
 }
 
 fn main() {
@@ -171,6 +173,7 @@ impl SyslogServer {
         listener.set_nonblocking(true)?;
 
         let stream_name = get_kinesis_stream_name(&self.kinesis_client)?;
+        let disable_retry = args.flag_disable_retry;
 
         let stats = if args.flag_enable_stats {
             let (stats, _stats_thread) = Stats::spawn_thread(args.flag_influxdb_url);
@@ -200,7 +203,7 @@ impl SyslogServer {
                     let stream_name = stream_name.clone();
                     let inflight = self.concurrency;
                     thread::spawn(move || {
-                        let tx = kinesis_tx(stream_name, 1, inflight);
+                        let tx = kinesis_tx(stream_name, 1, inflight, disable_retry);
 
                         info!("STARTING: thread for client {:?}", client);
 
@@ -235,7 +238,7 @@ impl SyslogServer {
 
 type RecordsChannel = futures::sync::mpsc::Sender<rusoto_kinesis::PutRecordsRequestEntry>;
 
-pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize) -> RecordsChannel {
+pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize, disable_retry: bool) -> RecordsChannel {
     info!("CREATING kinesis channel");
     use futures::sync::mpsc::channel;
     use futures::{Future, Sink, Stream};
@@ -243,7 +246,12 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize) -> Reco
     let (tx, rx) = channel(chan_buf);
     let client = Arc::new(KinesisClient::simple(Region::UsWest2));
 
-    let mut retry_tx = tx.clone().wait();
+    let mut retry_tx = if disable_retry {
+        None
+    }else {
+        Some(tx.clone().wait())
+    };
+
     std::thread::spawn(move || {
         info!("STARTING kinesis batch put thread");
         let puts = rx.chunks(500)
@@ -277,7 +285,7 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize) -> Reco
                 Ok(Ok(put)) => {
                     if let Some(failed) = put.failed_record_count {
                         if failed > 0 {
-                            error!("{} record(s) failed to commit to kinesis", failed);
+                            error!("{} record(s) failed to commit to kinesis. not sure what to do. dropping them. printed below:", failed);
                             let put: PutRecordsOutput = put;
                             for rec in put.records {
                                 if rec.error_code.is_some() {
@@ -294,18 +302,22 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize) -> Reco
                             dispatch_err
                         );
                         for record in put_records_input.records {
-                            match retry_tx.send(record) {
-                                Ok(()) => debug!("Wait#send succeeded"),
-                                Err(e) => error!("Wait#send error {:?}", e),
+                            if let Some(ref mut retry_tx) = retry_tx {
+                                match retry_tx.send(record) {
+                                    Ok(()) => debug!("Wait#send succeeded"),
+                                    Err(e) => error!("Wait#send error {:?}", e),
+                                }
                             }
                         }
                     }
                     PutRecordsError::Unknown(raw_message) => {
                         error!("unknown error: '{:?}', retrying records...", raw_message);
                         for record in put_records_input.records {
-                            match retry_tx.send(record) {
-                                Ok(()) => debug!("Wait#send succeeded"),
-                                Err(e) => error!("Wait#send error {:?}", e),
+                            if let Some(ref mut retry_tx) = retry_tx {
+                                match retry_tx.send(record) {
+                                    Ok(()) => debug!("Wait#send succeeded"),
+                                    Err(e) => error!("Wait#send error {:?}", e),
+                                }
                             }
                         }
                     }
