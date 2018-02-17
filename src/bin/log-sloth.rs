@@ -368,8 +368,10 @@ impl SyslogClient {
             log.sender_ip = Some(addr);
 
             // Only count clients who send at least 1 message. This stops counting ELB health checks.
-            if let Some(ref stats) = stats {
-                stats.clients.fetch_add(1, Ordering::Relaxed);
+            if self.lines_read == 1 {
+                if let Some(ref stats) = stats {
+                    stats.clients.fetch_add(1, Ordering::Relaxed);
+                }
             }
 
             let json_vecu8 = serde_json::to_vec(&log)?;

@@ -18,7 +18,7 @@ const USAGE: &'static str = "
 stress.
 
 Usage:
-  stress [--num-messages=<nm>]
+  stress [--num-messages=<nm>] [--target=<target>]
   stress (-h | --help)
   stress --version
 
