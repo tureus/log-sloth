@@ -10,7 +10,7 @@ serde_derive = "*"
 serde_json = "*"
 nom-syslog = { path = "nom-syslog" }
 nom = "*"
-log = "*", features = ["release_max_level_info"]
+log = {version = "*", features = ["release_max_level_info"] }
 env_logger = "*"
 pretty-bytes = "*"
 rusoto_core = { git = "https://github.com/rusoto/rusoto", branch = "master" }
