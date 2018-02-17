@@ -38,7 +38,7 @@ impl Stats {
                     res.body().concat2()
                 });
 
-                let res = core.run(future).unwrap();
+                let res = core.run(future).unwrap_or_default();
 
                 use std::str::from_utf8;
                 debug!(

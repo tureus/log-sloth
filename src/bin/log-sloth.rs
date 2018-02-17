@@ -185,25 +185,19 @@ impl SyslogServer {
         loop {
             match listener.accept() {
                 Ok((stream, _)) => {
-                    if let Some(ref stats) = stats {
-                        stats.clients.fetch_add(1, Ordering::Relaxed);
-                    }
-
                     stream
                         .set_nonblocking(false)
                         .expect("Could not set nonblocking mode on client stream");
-                    let mut client = match self.init_client(stream) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            error!("failed to spawn client {:?}", e);
-                            continue;
-                        }
-                    };
+                    let tracking_stream = stream.try_clone().expect("could not clone stream");
+                    self.streams.push(tracking_stream);
+
+                    let mut client = SyslogClient::new(stream, self.running.clone());
 
                     let stream_name = stream_name.clone();
                     let inflight = self.concurrency;
+                    let stats = stats.clone();
                     thread::spawn(move || {
-                        let tx = kinesis_tx(stream_name, 1, inflight, disable_retry);
+                        let tx = kinesis_tx(stream_name.clone(), 1, inflight, disable_retry);
 
                         info!("STARTING: thread for client {:?}", client);
 
@@ -215,7 +209,7 @@ impl SyslogServer {
                             );
                             prctl::set_name(&name[..]).unwrap();
                         }
-                        let res = client.run(tx.clone());
+                        let res = client.run(tx.clone(), stats);
                         info!("STOPPING: thread for client ending with {:?}", res);
                     });
                 }
@@ -260,12 +254,9 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize, disable
                     records: batch,
                     stream_name: stream_name.clone(),
                 };
-                //  : futures::Then<rusoto_core::RusotoFuture<PutRecordsOutput,(PutRecordsError,usize)>, Result<(usize,usize),(usize,usize)>, _>
+
                 client.put_records(&input).then(|put_res| {
-                    let retval: Result<
-                        Result<PutRecordsOutput, (PutRecordsError, PutRecordsInput)>,
-                        (),
-                    > = match put_res {
+                        match put_res {
                         Ok(res) => {
                             trace!("match put_res: it worked");
                             Ok(Ok(res))
@@ -274,8 +265,7 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize, disable
                             trace!("match put_res: failed");
                             Ok(Err((err, input)))
                         }
-                    };
-                    retval
+                    }
                 })
             })
             .buffer_unordered(inflight);
@@ -303,10 +293,7 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize, disable
                         );
                         for record in put_records_input.records {
                             if let Some(ref mut retry_tx) = retry_tx {
-                                match retry_tx.send(record) {
-                                    Ok(()) => debug!("Wait#send succeeded"),
-                                    Err(e) => error!("Wait#send error {:?}", e),
-                                }
+                                retry_tx.send(record).unwrap_or_else(|r| error!("Wait#send error {:?}", r) );
                             }
                         }
                     }
@@ -314,20 +301,13 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize, disable
                         error!("unknown error: '{:?}', retrying records...", raw_message);
                         for record in put_records_input.records {
                             if let Some(ref mut retry_tx) = retry_tx {
-                                match retry_tx.send(record) {
-                                    Ok(()) => debug!("Wait#send succeeded"),
-                                    Err(e) => error!("Wait#send error {:?}", e),
-                                }
+                                retry_tx.send(record).unwrap_or_else(|r| error!("Wait#send error {:?}", r) );
                             }
                         }
                     }
-                    other => {
-                        error!("unhandled kinesis error: {:?}", other);
-                    }
+                    other => error!("unhandled kinesis error: {:?}", other)
                 },
-                other => {
-                    error!("puts.wait() fallthrough: {:?}", other);
-                }
+                other => error!("puts.wait() fallthrough: {:?}", other)
             }
         }
         info!("STOPPING kinesis batch put thread");
@@ -366,7 +346,7 @@ impl SyslogClient {
         self.stream.shutdown(Shutdown::Both)
     }
 
-    fn run(&mut self, kinesis_stream: RecordsChannel) -> Result<(), io::Error> {
+    fn run(&mut self, kinesis_stream: RecordsChannel, stats: Option<Arc<Stats>>) -> Result<(), io::Error> {
         let kinesis_stream = kinesis_stream;
         let addr = self.stream.peer_addr()?;
         let bufr = BufReader::with_capacity(4 * 1024, &self.stream);
@@ -387,6 +367,11 @@ impl SyslogClient {
             let mut log = self.parse_syslog_line(&line[..])?;
             log.sender_ip = Some(addr);
 
+            // Only count clients who send at least 1 message. This stops counting ELB health checks.
+            if let Some(ref stats) = stats {
+                stats.clients.fetch_add(1, Ordering::Relaxed);
+            }
+
             let json_vecu8 = serde_json::to_vec(&log)?;
 
             let partition_key = format!("{}", counter);
@@ -397,10 +382,7 @@ impl SyslogClient {
                 partition_key: partition_key.clone(),
             };
 
-            match kinesis_wait.send(record) {
-                Ok(()) => debug!("Wait#send succeeded"),
-                Err(e) => error!("Wait#send error {:?}", e),
-            }
+            kinesis_wait.send(record).unwrap_or_else(|e| error!("Wait#send error {:?}", e));
         }
 
         info!(
@@ -433,28 +415,6 @@ impl SyslogClient {
                 Err(io::Error::new(io::ErrorKind::UnexpectedEof, "bad data"))
             }
         }
-    }
-}
-
-pub trait LogProcessor {
-    fn process(&self, string: &str) -> Result<Log, io::Error>;
-}
-
-#[allow(dead_code)]
-struct Fortigate {}
-
-impl LogProcessor for Fortigate {
-    fn process(&self, line: &str) -> Result<Log, io::Error> {
-        debug!("processing {}", line);
-        let table: Vec<Vec<String>> = line.split_whitespace()
-            .map(|x| x.split('=').map(|y| y.to_string()).collect())
-            .collect();
-        Ok(Log {
-            app: "fortigate".to_owned(),
-            sender_ip: None,
-            kv: Some(table),
-            message: None,
-        })
     }
 }
 
