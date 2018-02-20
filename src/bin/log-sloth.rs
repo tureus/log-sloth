@@ -407,14 +407,14 @@ impl SyslogClient {
                 message: Some(datum.msg),
             }),
             IResult::Incomplete(a) => {
-                error!("incomplete: {:?}", a);
+                error!("incomplete: {:?} on {}", a, line);
                 Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "incomplete parse",
                 ))
             }
             IResult::Error(e) => {
-                error!("error: {:?}", e);
+                error!("parse error: {:?} on {}", e, line);
                 Err(io::Error::new(io::ErrorKind::UnexpectedEof, "bad data"))
             }
         }
