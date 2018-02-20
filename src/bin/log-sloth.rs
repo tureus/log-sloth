@@ -199,7 +199,7 @@ impl SyslogServer {
                     thread::spawn(move || {
                         let tx = kinesis_tx(stream_name.clone(), 1, inflight, disable_retry);
 
-                        info!("STARTING: thread for client {:?}", client);
+                        debug!("STARTING: thread for client {:?}", client);
 
                         #[cfg(linux)]
                         {
@@ -210,7 +210,9 @@ impl SyslogServer {
                             prctl::set_name(&name[..]).unwrap();
                         }
                         let res = client.run(tx.clone(), stats);
-                        info!("STOPPING: thread for client ending with {:?}", res);
+                        if res.is_err() {
+                            error!("STOPPING: thread for client ending with {:?}", res);
+                        }
                     });
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -233,7 +235,7 @@ impl SyslogServer {
 type RecordsChannel = futures::sync::mpsc::Sender<rusoto_kinesis::PutRecordsRequestEntry>;
 
 pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize, disable_retry: bool) -> RecordsChannel {
-    info!("CREATING kinesis channel");
+    debug!("CREATING kinesis channel");
     use futures::sync::mpsc::channel;
     use futures::{Future, Sink, Stream};
 
@@ -247,7 +249,7 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize, disable
     };
 
     std::thread::spawn(move || {
-        info!("STARTING kinesis batch put thread");
+        debug!("STARTING kinesis batch put thread");
         let puts = rx.chunks(500)
             .map(|batch: Vec<PutRecordsRequestEntry>| {
                 let input = PutRecordsInput {
@@ -310,7 +312,7 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize, disable
                 other => error!("puts.wait() fallthrough: {:?}", other)
             }
         }
-        info!("STOPPING kinesis batch put thread");
+        debug!("STOPPING kinesis batch put thread");
     });
 
     tx
@@ -388,12 +390,14 @@ impl SyslogClient {
             kinesis_wait.send(record).unwrap_or_else(|e| error!("Wait#send error {:?}", e));
         }
 
-        info!(
-            "{:?} done. {} bytes, {} lines",
-            self,
-            convert(self.bytes_read as f64),
-            self.lines_read
-        );
+        if self.lines_read != 0 {
+            info!(
+                "{:?} done. {} bytes, {} lines",
+                self,
+                convert(self.bytes_read as f64),
+                self.lines_read
+            );
+        }
         Ok(())
     }
 
