@@ -8,8 +8,7 @@ extern crate tokio_core;
 
 pub mod stats;
 
-#[allow(dead_code)]
-fn extract_kv(input: &str) -> Vec<Vec<String>> {
+pub fn extract_kv(input: &str) -> Vec<Vec<String>> {
     input
         .split_whitespace()
         .map(|x| x.split('=').map(|y| y.to_string()).collect())

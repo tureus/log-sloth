@@ -20,6 +20,8 @@ extern crate env_logger;
 #[macro_use]
 extern crate log;
 
+extern crate time;
+
 extern crate log_sloth;
 
 use std::{env, io, thread};
@@ -42,6 +44,7 @@ use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsError, 
                      PutRecordsOutput, PutRecordsRequestEntry};
 
 use log_sloth::stats::Stats;
+use log_sloth::extract_kv;
 
 const USAGE: &str = "
 log-sloth.
@@ -368,6 +371,12 @@ impl SyslogClient {
             self.lines_read += 1;
             let mut log = self.parse_syslog_line(&line[..])?;
             log.sender_ip = Some(addr);
+            // check for fortigate in
+            if let Some(ref host) = log.host {
+                if host.find(".fg.").is_some() {
+                    log.kv = Some(extract_kv(log.message.unwrap()));
+                }
+            }
 
             // Only count clients who send at least 1 message. This stops counting ELB health checks.
             if let Some(ref stats) = stats {
@@ -377,7 +386,8 @@ impl SyslogClient {
                 stats.rx_bytes.fetch_add(line.len(), Ordering::Relaxed);
             }
 
-            let json_vecu8 = serde_json::to_vec(&log)?;
+            let mut json_vecu8 = serde_json::to_vec(&log)?;
+            json_vecu8.push('\n' as u8);
 
             let partition_key = format!("{}", counter);
 
@@ -409,6 +419,10 @@ impl SyslogClient {
                 sender_ip: None,
                 kv: None,
                 message: Some(datum.msg),
+                host: Some(datum.host),
+                pri: Some(datum.pri),
+                tag: datum.tag,
+                ts: Some(datum.ts.to_utc().to_timespec().sec),
             }),
             IResult::Incomplete(a) => {
                 error!("incomplete: {:?} on {}", a, line);
@@ -430,5 +444,10 @@ pub struct Log<'a> {
     pub app: String,
     pub sender_ip: Option<std::net::SocketAddr>,
     pub kv: Option<Vec<Vec<String>>>,
+
+    pub pri: Option<&'a str>,
+    pub ts: Option<i64>,
+    pub host: Option<&'a str>,
+    pub tag: Option<(&'a str, Option<&'a str>)>,
     pub message: Option<&'a str>,
 }
