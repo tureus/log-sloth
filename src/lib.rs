@@ -35,7 +35,7 @@ fn test_extract_kv() {
 #[test]
 fn fortigate_parses_bad_kv() {
     let res : Vec<Vec<String>> = extract_kv(
-        r##"date=2018-02-21 time=20:37:11 logver=54 devname=\"VCA-CORP-INET-900D\" devid=\"FG900D3916800019\" vd=\"edge\" date=2018-02-21 time=20:37:11 logid=\"0000000013\" type=\"traffic\" subtype=\"forward\" level=\"notice\" srcip=172.26.32.44 srcport=53075 srcintf=\"portA\" dstip=172.217.11.163 dstport=443 dstintf=\"portB\" poluuid=\"b018d2b0-4491-51e6-ff20-8b8d11964286\" sessionid=3075354808 proto=17 action=\"accept\" policyid=2 policytype=\"policy\" dstcountry=\"United States\" srccountry=\"Reserved\" trandisp=\"snat\" transip=8.37.96.36 transport=53075 service=\"udp/443\" appid=40169 app=\"QUIC\" appcat=\"Network.Service\" apprisk=\"low\" applist=\"app_ctrl\" appact=\"detected\" duration=181 sentbyte=3900 rcvdbyte=4753 sentpkt=8 rcvdpkt=7 utmaction=\"allow\" countapp=1"##);
+        r##"date=2018-02-21 time=02:46:53 logver=54 devname=\"VINC-INTRANET-600D\" devid=\"FGT6HD3916801675\" vd=\"servers\" date=2018-02-21 time=02:46:55 logid=\"0000000013\" type=\"traffic\" subtype=\"forward\" level=\"notice\" srcip=172.30.148.11 srcport=57789 srcintf=\"outside\" dstip=10.31.3.226 dstport=53 dstintf=\"dc\" poluuid=\"78023d9e-aed0-51e7-a6c7-27d388c2a131\" sessionid=417662316 proto=17 action=\"accept\" policyid=1073741834 policytype=\"policy\" dstcountry=\"Reserved\" srccountry=\"Reserved\" trandisp=\"noop\" service=\"gDNS\" duration=180 sentbyte=57 rcvdbyte=189 sentpkt=1 rcvdpkt=1 appcat=\"unscanned\""##);
     let expected : Vec<Vec<String>> =         vec![
         vec!["date".into(), "2018-02-21".into()],
         vec!["time".into(), "02:46:53".into()],
