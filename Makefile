@@ -1,7 +1,7 @@
 .PHONY: push deploy local
 
 REPO := $(shell aws ecr describe-repositories | jq -r '.repositories | map(select(.repositoryName == "log-sloth") | .repositoryUri) | first')
-TAG := latest
+TAG := $(shell date +%Y-%m-%d-%H-%M)
 
 build:
 	docker build -t $(REPO):$(TAG) .

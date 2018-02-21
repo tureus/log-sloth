@@ -200,7 +200,13 @@ impl SyslogServer {
                     let inflight = self.concurrency;
                     let stats = stats.clone();
                     thread::spawn(move || {
-                        let tx = kinesis_tx(stream_name.clone(), 1, inflight, disable_retry);
+                        let tx = kinesis_tx(
+                            stream_name.clone(),
+                            1,
+                            inflight,
+                            disable_retry,
+                            stats.clone(),
+                        );
 
                         debug!("STARTING: thread for client {:?}", client);
 
@@ -237,7 +243,13 @@ impl SyslogServer {
 
 type RecordsChannel = futures::sync::mpsc::Sender<rusoto_kinesis::PutRecordsRequestEntry>;
 
-pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize, disable_retry: bool) -> RecordsChannel {
+pub fn kinesis_tx(
+    stream_name: String,
+    chan_buf: usize,
+    inflight: usize,
+    disable_retry: bool,
+    stats: Option<Arc<Stats>>,
+) -> RecordsChannel {
     debug!("CREATING kinesis channel");
     use futures::sync::mpsc::channel;
     use futures::{Future, Sink, Stream};
@@ -247,7 +259,7 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize, disable
 
     let mut retry_tx = if disable_retry {
         None
-    }else {
+    } else {
         Some(tx.clone().wait())
     };
 
@@ -260,16 +272,14 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize, disable
                     stream_name: stream_name.clone(),
                 };
 
-                client.put_records(&input).then(|put_res| {
-                        match put_res {
-                        Ok(res) => {
-                            trace!("match put_res: it worked");
-                            Ok(Ok(res))
-                        }
-                        Err(err) => {
-                            trace!("match put_res: failed");
-                            Ok(Err((err, input)))
-                        }
+                client.put_records(&input).then(|put_res| match put_res {
+                    Ok(res) => {
+                        trace!("match put_res: it worked");
+                        Ok(Ok(res))
+                    }
+                    Err(err) => {
+                        trace!("match put_res: failed");
+                        Ok(Err((err, input)))
                     }
                 })
             })
@@ -280,6 +290,10 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize, disable
                 Ok(Ok(put)) => {
                     if let Some(failed) = put.failed_record_count {
                         if failed > 0 {
+                            if let Some(ref s) = stats {
+                                s.kinesis_failures
+                                    .fetch_add(failed as usize, Ordering::Relaxed);
+                            }
                             error!("{} record(s) failed to commit to kinesis. not sure what to do. dropping them. printed below:", failed);
                             let put: PutRecordsOutput = put;
                             for rec in put.records {
@@ -298,7 +312,9 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize, disable
                         );
                         for record in put_records_input.records {
                             if let Some(ref mut retry_tx) = retry_tx {
-                                retry_tx.send(record).unwrap_or_else(|r| error!("Wait#send error {:?}", r) );
+                                retry_tx
+                                    .send(record)
+                                    .unwrap_or_else(|r| error!("Wait#send error {:?}", r));
                             }
                         }
                     }
@@ -306,13 +322,15 @@ pub fn kinesis_tx(stream_name: String, chan_buf: usize, inflight: usize, disable
                         error!("unknown error: '{:?}', retrying records...", raw_message);
                         for record in put_records_input.records {
                             if let Some(ref mut retry_tx) = retry_tx {
-                                retry_tx.send(record).unwrap_or_else(|r| error!("Wait#send error {:?}", r) );
+                                retry_tx
+                                    .send(record)
+                                    .unwrap_or_else(|r| error!("Wait#send error {:?}", r));
                             }
                         }
                     }
-                    other => error!("unhandled kinesis error: {:?}", other)
+                    other => error!("unhandled kinesis error: {:?}", other),
                 },
-                other => error!("puts.wait() fallthrough: {:?}", other)
+                other => error!("puts.wait() fallthrough: {:?}", other),
             }
         }
         debug!("STOPPING kinesis batch put thread");
@@ -351,7 +369,11 @@ impl SyslogClient {
         self.stream.shutdown(Shutdown::Both)
     }
 
-    fn run(&mut self, kinesis_stream: RecordsChannel, stats: Option<Arc<Stats>>) -> Result<(), io::Error> {
+    fn run(
+        &mut self,
+        kinesis_stream: RecordsChannel,
+        stats: Option<Arc<Stats>>,
+    ) -> Result<(), io::Error> {
         let kinesis_stream = kinesis_stream;
         let addr = self.stream.peer_addr()?;
         let bufr = BufReader::with_capacity(4 * 1024, &self.stream);
@@ -378,16 +400,17 @@ impl SyslogClient {
                 }
             }
 
+            let mut json_vecu8 = serde_json::to_vec(&log)?;
+            json_vecu8.push('\n' as u8);
+
             // Only count clients who send at least 1 message. This stops counting ELB health checks.
             if let Some(ref stats) = stats {
                 if self.lines_read == 1 {
-                        stats.clients.fetch_add(1, Ordering::Relaxed);
+                    stats.clients.fetch_add(1, Ordering::Relaxed);
                 }
                 stats.rx_bytes.fetch_add(line.len(), Ordering::Relaxed);
+                stats.tx_serialized_bytes.fetch_add(json_vecu8.len(), Ordering::Relaxed);
             }
-
-            let mut json_vecu8 = serde_json::to_vec(&log)?;
-            json_vecu8.push('\n' as u8);
 
             let partition_key = format!("{}", counter);
 
@@ -397,7 +420,9 @@ impl SyslogClient {
                 partition_key: partition_key.clone(),
             };
 
-            kinesis_wait.send(record).unwrap_or_else(|e| error!("Wait#send error {:?}", e));
+            kinesis_wait
+                .send(record)
+                .unwrap_or_else(|e| error!("Wait#send error {:?}", e));
         }
 
         if self.lines_read != 0 {
