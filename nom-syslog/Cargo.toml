@@ -11,5 +11,5 @@ documentation = "https://docs.rs/nom-syslog"
 name = "nom_syslog"
 
 [dependencies]
-nom = "3.2"
+nom = { version = "3.2", features = ["verbose-errors"] }
 time = "0.1"
