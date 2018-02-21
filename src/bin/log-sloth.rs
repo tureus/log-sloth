@@ -395,10 +395,12 @@ impl SyslogClient {
             log.sender_ip = Some(addr);
             // check for fortigate in
             if let Some(ref host) = log.host {
-                if host.find(".fg.").is_some() {
-                    log.kv = Some(extract_kv(log.message.unwrap()));
+                let kv = extract_kv(log.message.unwrap());
+                if kv.len() > 0 {
+                    log.kv = Some(kv);
                 }
             }
+            debug!("log: {:?}", log);
 
             let mut json_vecu8 = serde_json::to_vec(&log)?;
             json_vecu8.push('\n' as u8);

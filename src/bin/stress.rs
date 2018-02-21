@@ -64,7 +64,7 @@ fn main() {
 fn stress(target: String, num_messages: usize) -> std::io::Result<()> {
     let mut stream = TcpStream::connect(target).expect("Could not connect to the server!");
 
-    let buf = r##"<14>Dec 13 17:45:02 SANTA-CLAUS-W764.blerg.com nxWinEvt: {"EventTime":"2017-12-19 17:45:02","Hostname":"fake-hostname","Keywords":-9214364837600034816,"EventType":"AUDIT_SUCCESS","SeverityValue":2,"Severity":"INFO","EventID":4656,"SourceName":"Microsoft-Windows-Security-Auditing","ProviderGuid":"{54849625-5478-4994-A5BA-3E3B0328C30D}","Version":1,"Task":12804,"OpcodeValue":0,"RecordNumber":7613465324,"ProcessID":892,"ThreadID":908,"Channel":"Security","AccessReason":"-","AccessMask":"0x2","PrivilegeList":"-","RestrictedSidCount":"0","ProcessName":"C:\\Windows\\System32\\svchost.exe","EventReceivedTime":"2017-12-19 17:52:27","SourceModuleName":"eventlog","SourceModuleType":"im_msvistalog"}
+    let buf = r##"<14>Dec 13 17:45:02 SANTA-CLAUS-W764.blerg.com date=2018-02-21 time=20:37:11 logver=54 devname=\"VCA-CORP-INET-900D\" devid=\"FG900D3916800019\" vd=\"edge\" date=2018-02-21 time=20:37:11 logid=\"0000000013\" type=\"traffic\" subtype=\"forward\" level=\"notice\" srcip=172.26.32.44 srcport=53075 srcintf=\"portA\" dstip=172.217.11.163 dstport=443 dstintf=\"portB\" poluuid=\"b018d2b0-4491-51e6-ff20-8b8d11964286\" sessionid=3075354808 proto=17 action=\"accept\" policyid=2 policytype=\"policy\" dstcountry=\"United States\" srccountry=\"Reserved\" trandisp=\"snat\" transip=8.37.96.36 transport=53075 service=\"udp/443\" appid=40169 app=\"QUIC\" appcat=\"Network.Service\" apprisk=\"low\" applist=\"app_ctrl\" appact=\"detected\" duration=181 sentbyte=3900 rcvdbyte=4753 sentpkt=8 rcvdpkt=7 utmaction=\"allow\" countapp=1
 "##;
 
     let mut bytes_written = 0;
