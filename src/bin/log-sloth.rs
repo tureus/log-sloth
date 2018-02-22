@@ -172,8 +172,8 @@ impl SyslogServer {
     }
 
     fn init_client(&mut self, stream: TcpStream) -> io::Result<SyslogClient> {
-        let tracking_stream = stream.try_clone()?;
-        self.streams.push(tracking_stream);
+//        let tracking_stream = stream.try_clone()?;
+//        self.streams.push(tracking_stream);
 
         Ok(SyslogClient::new(stream, self.running.clone()))
     }
@@ -200,8 +200,8 @@ impl SyslogServer {
                     stream
                         .set_nonblocking(false)
                         .expect("Could not set nonblocking mode on client stream");
-                    let tracking_stream = stream.try_clone().expect("could not clone stream");
-                    self.streams.push(tracking_stream);
+//                    let tracking_stream = stream.try_clone().expect("could not clone stream");
+//                    self.streams.push(tracking_stream);
 
                     let mut client = SyslogClient::new(stream, self.running.clone());
 
