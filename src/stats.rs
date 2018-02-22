@@ -91,5 +91,5 @@ fn time_align(interval: Duration) {
     let now = time::now();
     let til_boundary = (now.tm_sec as u64) % interval.as_secs();
     trace!("sleeping {} seconds to get to the {} boundary", til_boundary, interval.as_secs());
-    thread::sleep(Duration::from_secs(til_boundary));
+    thread::sleep(Duration::from_secs(til_boundary-2)); // back off a little, buckets are getting messed up
 }
