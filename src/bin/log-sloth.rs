@@ -76,9 +76,6 @@ struct Args {
 fn main() {
     openssl_probe::init_ssl_cert_env_vars();
 
-    #[cfg(target_os = "linux")]
-    prctl::set_name("log-sloth main thread").unwrap();
-
     let args: Args = Docopt::new(USAGE)
         .and_then(|d| d.deserialize())
         .unwrap_or_else(|e| e.exit());
@@ -99,14 +96,22 @@ fn main() {
         r.store(false, Ordering::SeqCst);
     }).expect("Error setting Ctrl-C handler");
 
-    let mut server = SyslogServer::new(running.clone(), args.flag_concurrency);
-    server.run(args).expect("syslog server died");
+    let server_running = running.clone();
+    let server = thread::spawn(move || {
+      #[cfg(target_os = "linux")]
+      prctl::set_name("acceptor").unwrap();
 
+      let mut server = SyslogServer::new(server_running.clone(), args.flag_concurrency);
+      server.run(args).expect("syslog server died");
+    });
+
+    #[cfg(target_os = "linux")]
+    prctl::set_name("main").unwrap();
     info!("Waiting for Ctrl-C...");
     while running.load(Ordering::SeqCst) {}
     info!("Received Ctrl-C. Exiting...");
 
-    ()
+    server.join();
 }
 
 // I don't want to leak ARNs in to public code, so this little ditty pulls the name out of AWS
@@ -201,8 +206,10 @@ impl SyslogServer {
                     let stream_name = stream_name.clone();
                     let inflight = self.concurrency;
                     let stats = stats.clone();
+                    let kinesis_client = self.kinesis_client.clone();
                     thread::spawn(move || {
                         let tx = kinesis_tx(
+                            kinesis_client,
                             stream_name.clone(),
                             1,
                             inflight,
@@ -211,12 +218,11 @@ impl SyslogServer {
                         );
 
                         debug!("STARTING: thread for client {:?}", client);
-
                         #[cfg(target_os = "linux")]
                         {
                             let name = format!(
-                                "log-sloth client thread ({:?})",
-                                client.stream.peer_addr()
+                                "{:?}",
+                                client.stream.peer_addr().unwrap()
                             );
                             prctl::set_name(&name[..]).unwrap();
                         }
@@ -246,6 +252,7 @@ impl SyslogServer {
 type RecordsChannel = futures::sync::mpsc::Sender<rusoto_kinesis::PutRecordsRequestEntry>;
 
 pub fn kinesis_tx(
+    client: DefaultKinesisClient,
     stream_name: String,
     chan_buf: usize,
     inflight: usize,
@@ -253,11 +260,11 @@ pub fn kinesis_tx(
     stats: Option<Arc<Stats>>,
 ) -> RecordsChannel {
     debug!("CREATING kinesis channel");
+
     use futures::sync::mpsc::channel;
     use futures::{Future, Sink, Stream};
 
     let (tx, rx) = channel(chan_buf);
-    let client = Arc::new(KinesisClient::simple(Region::UsWest2));
 
     let mut retry_tx = if disable_retry {
         None
@@ -267,6 +274,12 @@ pub fn kinesis_tx(
 
     std::thread::spawn(move || {
         debug!("STARTING kinesis batch put thread");
+        #[cfg(target_os = "linux")]
+        {
+            let now = time::now().tm_sec;
+            let name = format!("k rx {}",now);
+            prctl::set_name(&name[..]).unwrap();
+        }
         let puts = rx.chunks(500)
             .map(|batch: Vec<PutRecordsRequestEntry>| {
                 let input = PutRecordsInput {
