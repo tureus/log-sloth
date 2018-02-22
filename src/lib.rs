@@ -6,6 +6,8 @@ extern crate futures;
 extern crate hyper;
 extern crate tokio_core;
 
+extern crate time;
+
 pub mod stats;
 
 pub fn extract_kv(input: &str) -> Vec<Vec<String>> {

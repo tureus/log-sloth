@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use hostname;
 use std::thread;
+use std::time::Duration;
+use time;
 use std::sync::Arc;
 
 use futures::{Future, Stream};
@@ -15,10 +17,12 @@ pub struct Stats {
 }
 
 impl Stats {
-    pub fn spawn_thread(influxdb_url: String) -> (Arc<Self>, thread::JoinHandle<()>) {
-        info!("spawning stats thread");
+    pub fn spawn_thread(influxdb_url: String, interval_sec: u64) -> (Arc<Self>, thread::JoinHandle<()>) {
+        info!("spawning stats thread influxdb_url={} interval_sec={}", influxdb_url, interval_sec);
         let stats = Arc::new(Self::new());
         let stats_2 = stats.clone();
+
+        let interval = Duration::from_secs(interval_sec);
 
         let handle = thread::spawn(move || {
             let stats = stats_2;
@@ -28,6 +32,8 @@ impl Stats {
 
             let hostname = hostname::get_hostname().unwrap();
             let client = Client::new(&handle);
+
+            time_align(interval);
 
             loop {
                 let series = stats.series(&hostname);
@@ -47,7 +53,7 @@ impl Stats {
                     "influxdb response body={}",
                     from_utf8(&res.to_owned()).unwrap()
                 );
-                thread::sleep_ms(15*1000);
+                time_align(interval);
             }
         });
 
@@ -79,4 +85,11 @@ log_sloth_stats,host={} tx_serialized_bytes={}.0"#,
             self.tx_serialized_bytes.load(Ordering::Relaxed),
         )
     }
+}
+
+fn time_align(interval: Duration) {
+    let now = time::now();
+    let til_boundary = (now.tm_sec as u64) % interval.as_secs();
+    trace!("sleeping {} seconds to get to the {} boundary", til_boundary, interval.as_secs());
+    thread::sleep(Duration::from_secs(til_boundary));
 }

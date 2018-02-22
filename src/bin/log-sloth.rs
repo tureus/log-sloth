@@ -50,7 +50,7 @@ const USAGE: &str = "
 log-sloth.
 
 Usage:
-  log-sloth [--concurrency=N] [--disable-retry] [--enable-stats [--influxdb-url=URL]]
+  log-sloth [--concurrency=N] [--disable-retry] [--enable-stats [--influxdb-url=URL] [--stats-interval=SEC]]
   log-sloth (-h | --help)
   log-sloth --version
 
@@ -60,6 +60,7 @@ Options:
   --concurrency=<kn>    Connections to Kinesis per client [default: 10]
   --enable-stats        Send stats to InfluxDB backend
   --influxdb-url=<url>  Target InfluxDB server [default: http://127.0.0.1:8086/write?db=telegraf]
+  --stats-interval=<s>  Stats interval in seconds [default: 15]
   --disable-retry       Skip the feedback loop for retrying failed requests
 ";
 
@@ -67,6 +68,7 @@ Options:
 struct Args {
     pub flag_concurrency: usize,
     pub flag_influxdb_url: String,
+    pub flag_stats_interval: u64,
     pub flag_enable_stats: bool,
     pub flag_disable_retry: bool,
 }
@@ -179,7 +181,7 @@ impl SyslogServer {
         let disable_retry = args.flag_disable_retry;
 
         let stats = if args.flag_enable_stats {
-            let (stats, _stats_thread) = Stats::spawn_thread(args.flag_influxdb_url);
+            let (stats, _stats_thread) = Stats::spawn_thread(args.flag_influxdb_url, args.flag_stats_interval);
             Some(stats)
         } else {
             None
@@ -393,12 +395,9 @@ impl SyslogClient {
             self.lines_read += 1;
             let mut log = self.parse_syslog_line(&line[..])?;
             log.sender_ip = Some(addr);
-            // check for fortigate in
-            if let Some(ref host) = log.host {
-                let kv = extract_kv(log.message.unwrap());
-                if kv.len() > 0 {
-                    log.kv = Some(kv);
-                }
+            let kv = extract_kv(log.message.unwrap());
+            if kv.len() > 0 {
+                log.kv = Some(kv);
             }
             debug!("log: {:?}", log);
 
