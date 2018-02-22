@@ -76,7 +76,7 @@ struct Args {
 fn main() {
     openssl_probe::init_ssl_cert_env_vars();
 
-    #[cfg(linux)]
+    #[cfg(target_os = "linux")]
     prctl::set_name("log-sloth main thread").unwrap();
 
     let args: Args = Docopt::new(USAGE)
@@ -212,7 +212,7 @@ impl SyslogServer {
 
                         debug!("STARTING: thread for client {:?}", client);
 
-                        #[cfg(linux)]
+                        #[cfg(target_os = "linux")]
                         {
                             let name = format!(
                                 "log-sloth client thread ({:?})",
