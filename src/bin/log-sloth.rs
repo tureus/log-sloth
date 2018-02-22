@@ -108,7 +108,9 @@ fn main() {
     #[cfg(target_os = "linux")]
     prctl::set_name("main").unwrap();
     info!("Waiting for Ctrl-C...");
-    while running.load(Ordering::SeqCst) {}
+    while running.load(Ordering::SeqCst) {
+        thread::sleep(std::time::Duration::from_millis(500));
+    }
     info!("Received Ctrl-C. Exiting...");
 
     server.join();
