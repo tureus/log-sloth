@@ -26,4 +26,4 @@ hyper = "*"
 
 [profile.release]
 lto = true
-# debug = true
+debug = true
