@@ -8,7 +8,13 @@ extern crate tokio_core;
 
 extern crate time;
 
+#[macro_use]
+extern crate nom;
+
 pub mod stats;
+pub mod fortigate_kv;
+
+
 
 pub fn extract_kv(input: &str) -> Vec<Vec<String>> {
     input
@@ -35,7 +41,7 @@ fn test_extract_kv() {
 }
 
 #[test]
-fn fortigate_parses_bad_kv() {
+fn fortigate_parses_remove_kv() {
     let res : Vec<Vec<String>> = extract_kv(
         r##"date=2018-02-21 time=02:46:53 logver=54 devname="VINC-INTRANET-600D" devid="FGT6HD3916801675" vd="servers" date=2018-02-21 time=02:46:55 logid="0000000013" type="traffic" subtype="forward" level="notice" srcip=172.30.148.11 srcport=57789 srcintf="outside" dstip=10.31.3.226 dstport=53 dstintf="dc" poluuid="78023d9e-aed0-51e7-a6c7-27d388c2a131" sessionid=417662316 proto=17 action="accept" policyid=1073741834 policytype="policy" dstcountry="Reserved" srccountry="Reserved" trandisp="noop" service="gDNS" duration=180 sentbyte=57 rcvdbyte=189 sentpkt=1 rcvdpkt=1 appcat="unscanned""##);
     let expected : Vec<Vec<String>> =         vec![

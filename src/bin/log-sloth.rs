@@ -44,7 +44,7 @@ use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsError, 
                      PutRecordsOutput, PutRecordsRequestEntry};
 
 use log_sloth::stats::Stats;
-use log_sloth::extract_kv;
+use log_sloth::fortigate_kv::extract_kv;
 
 const USAGE: &str = "
 log-sloth.
@@ -410,10 +410,7 @@ impl SyslogClient {
             self.lines_read += 1;
             let mut log = self.parse_syslog_line(&line[..])?;
             log.sender_ip = Some(addr);
-            let kv = extract_kv(log.message.unwrap());
-            if kv.len() > 0 {
-                log.kv = Some(kv);
-            }
+            log.kv = extract_kv(log.message.unwrap());
             debug!("log: {:?}", log);
 
             let mut json_vecu8 = serde_json::to_vec(&log)?;
@@ -484,7 +481,7 @@ impl SyslogClient {
 pub struct Log<'a> {
     pub app: String,
     pub sender_ip: Option<std::net::SocketAddr>,
-    pub kv: Option<Vec<Vec<String>>>,
+    pub kv: Option<Vec<(&'a str, &'a str)>>,
 
     pub pri: Option<&'a str>,
     pub ts: Option<i64>,
