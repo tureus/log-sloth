@@ -4,7 +4,10 @@ REPO := $(shell aws ecr describe-repositories | jq -r '.repositories | map(selec
 TAG := $(shell date +%Y-%m-%d-%H-%M)
 
 build:
-	docker build -t $(REPO):$(TAG) .
+	docker build ${BUILD_FLAGS} -t $(REPO):$(TAG) .
+
+push-perf:
+	BUILD_FLAGS="-f Dockerfile.perf" $(MAKE) push
 
 push: build
 	docker push $(REPO):$(TAG)
