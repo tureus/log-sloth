@@ -92,6 +92,9 @@ log_sloth_stats,host={} kinesis_inflight={}.0"#,
 }
 
 fn time_align(interval: Duration) {
+    if interval.as_secs() <= 5 {
+        return
+    }
     let now = time::now();
     let til_boundary = (now.tm_sec as u64) % interval.as_secs();
     trace!("sleeping {} seconds to get to the {} boundary", til_boundary, interval.as_secs());
