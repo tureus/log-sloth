@@ -14,6 +14,12 @@ extern crate nom;
 pub mod stats;
 pub mod fortigate_kv;
 
+#[warn(unused_variables)]
+pub fn rename_thread(input: &str) {
+    #[cfg(target_os = "linux")]
+    prctl::set_name("main").unwrap();
+}
+
 pub fn extract_kv(input: &str) -> Vec<Vec<String>> {
     input
         .split_whitespace()

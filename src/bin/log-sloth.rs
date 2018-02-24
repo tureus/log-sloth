@@ -45,6 +45,7 @@ use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsError, 
 
 use log_sloth::stats::Stats;
 use log_sloth::fortigate_kv::extract_kv;
+use log_sloth::rename_thread;
 
 const USAGE: &str = "
 log-sloth.
@@ -98,15 +99,13 @@ fn main() {
 
     let server_running = running.clone();
     let server = thread::spawn(move || {
-        #[cfg(target_os = "linux")]
-        prctl::set_name("acceptor").unwrap();
+        rename_thread("acceptor");
 
         let mut server = SyslogServer::new(server_running.clone(), args.flag_concurrency);
         server.run(args).expect("syslog server died");
     });
 
-    #[cfg(target_os = "linux")]
-    prctl::set_name("main").unwrap();
+    rename_thread("main");
     info!("Waiting for Ctrl-C...");
     while running.load(Ordering::SeqCst) {
         thread::sleep(std::time::Duration::from_millis(500));
@@ -214,11 +213,7 @@ impl SyslogServer {
                         );
 
                         debug!("STARTING: thread for client {:?}", client);
-                        #[cfg(target_os = "linux")]
-                        {
-                            let name = format!("{:?}", client.stream.peer_addr().unwrap());
-                            prctl::set_name(&name[..]).unwrap();
-                        }
+                        rename_thread(&format!("{:?}", client.stream.peer_addr().unwrap()));
                         let res = client.run(tx.clone(), stats);
                         if res.is_err() {
                             error!("STOPPING: thread for client ending with {:?}", res);
@@ -267,12 +262,7 @@ pub fn kinesis_tx(
 
     std::thread::spawn(move || {
         debug!("STARTING kinesis batch put thread");
-        #[cfg(target_os = "linux")]
-        {
-            let now = time::now().tm_sec;
-            let name = format!("k rx {}", now);
-            prctl::set_name(&name[..]).unwrap();
-        }
+        rename_thread(&format!("k rx {}", time::now().tm_sec));
         let puts = rx.chunks(500)
             .map(|batch: Vec<PutRecordsRequestEntry>| {
                 let input = PutRecordsInput {

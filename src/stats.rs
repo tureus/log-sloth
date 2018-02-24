@@ -10,6 +10,8 @@ use futures::{Future, Stream};
 use hyper::{Client, Method, Request, Uri};
 use tokio_core::reactor::Core;
 
+use super::rename_thread;
+
 #[derive(Default)]
 pub struct Stats {
     pub rx_bytes: AtomicUsize,
@@ -28,6 +30,7 @@ impl Stats {
         let interval = Duration::from_secs(interval_sec);
 
         let handle = thread::spawn(move || {
+            rename_thread("stats");
             let stats = stats_2;
             let mut core = Core::new().unwrap();
             let handle = core.handle();
