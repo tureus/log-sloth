@@ -14,8 +14,6 @@ extern crate openssl_probe;
 extern crate rusoto_core;
 extern crate rusoto_kinesis;
 
-extern crate prctl;
-
 extern crate env_logger;
 #[macro_use]
 extern crate log;

@@ -8,6 +8,8 @@ extern crate tokio_core;
 
 extern crate time;
 
+extern crate prctl;
+
 #[macro_use]
 extern crate nom;
 
