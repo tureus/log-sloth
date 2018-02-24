@@ -19,7 +19,7 @@ pub mod fortigate_kv;
 #[warn(unused_variables)]
 pub fn rename_thread(input: &str) {
     #[cfg(target_os = "linux")]
-    prctl::set_name("main").unwrap();
+    prctl::set_name(input).unwrap();
 }
 
 pub fn extract_kv(input: &str) -> Vec<Vec<String>> {

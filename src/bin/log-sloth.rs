@@ -73,7 +73,7 @@ struct Args {
 }
 
 fn main() {
-    openssl_probe::init_ssl_cert_env_vars();
+    openssl_probe::init_ssl_cert_env_vars(); // required for musl static ssl deploy
 
     let args: Args = Docopt::new(USAGE)
         .and_then(|d| d.deserialize())
