@@ -1,19 +1,22 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 use hostname;
 use std::thread;
 use std::time::Duration;
 use time;
 use std::sync::Arc;
+use std::default::Default;
 
 use futures::{Future, Stream};
 use hyper::{Client, Method, Request, Uri};
 use tokio_core::reactor::Core;
 
+#[derive(Default)]
 pub struct Stats {
     pub rx_bytes: AtomicUsize,
     pub clients: AtomicUsize,
     pub tx_serialized_bytes: AtomicUsize,
     pub kinesis_failures: AtomicUsize,
+    pub kinesis_inflight: AtomicIsize,
 }
 
 impl Stats {
@@ -61,12 +64,7 @@ impl Stats {
     }
 
     fn new() -> Self {
-        Self {
-            rx_bytes: AtomicUsize::new(0),
-            tx_serialized_bytes: AtomicUsize::new(0),
-            clients: AtomicUsize::new(0),
-            kinesis_failures: AtomicUsize::new(0)
-        }
+        Default::default()
     }
 
     pub fn series(&self, hostname: &str) -> String {
@@ -74,7 +72,8 @@ impl Stats {
             r#"log_sloth_stats,host={} rx_byte={}.0
 log_sloth_stats,host={} clients={}.0
 log_sloth_stats,host={} kinesis_put_failure={}.0
-log_sloth_stats,host={} tx_serialized_bytes={}.0"#,
+log_sloth_stats,host={} tx_serialized_bytes={}.0
+log_sloth_stats,host={} kinesis_inflight={}.0"#,
             hostname,
             self.rx_bytes.load(Ordering::Relaxed),
             hostname,
@@ -83,6 +82,8 @@ log_sloth_stats,host={} tx_serialized_bytes={}.0"#,
             self.kinesis_failures.load(Ordering::Relaxed),
             hostname,
             self.tx_serialized_bytes.load(Ordering::Relaxed),
+            hostname,
+            self.kinesis_inflight.load(Ordering::Relaxed),
         )
     }
 }
@@ -91,5 +92,5 @@ fn time_align(interval: Duration) {
     let now = time::now();
     let til_boundary = (now.tm_sec as u64) % interval.as_secs();
     trace!("sleeping {} seconds to get to the {} boundary", til_boundary, interval.as_secs());
-    thread::sleep(Duration::from_secs(til_boundary-2)); // back off a little, buckets are getting messed up
+    thread::sleep(Duration::from_secs(til_boundary-4)); // back off a little, buckets are getting messed up
 }

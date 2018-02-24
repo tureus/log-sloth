@@ -98,11 +98,11 @@ fn main() {
 
     let server_running = running.clone();
     let server = thread::spawn(move || {
-      #[cfg(target_os = "linux")]
-      prctl::set_name("acceptor").unwrap();
+        #[cfg(target_os = "linux")]
+        prctl::set_name("acceptor").unwrap();
 
-      let mut server = SyslogServer::new(server_running.clone(), args.flag_concurrency);
-      server.run(args).expect("syslog server died");
+        let mut server = SyslogServer::new(server_running.clone(), args.flag_concurrency);
+        server.run(args).expect("syslog server died");
     });
 
     #[cfg(target_os = "linux")]
@@ -113,7 +113,7 @@ fn main() {
     }
     info!("Received Ctrl-C. Exiting...");
 
-    server.join();
+    server.join().unwrap();
 }
 
 // I don't want to leak ARNs in to public code, so this little ditty pulls the name out of AWS
@@ -171,13 +171,6 @@ impl SyslogServer {
         //        self.listener
     }
 
-    fn init_client(&mut self, stream: TcpStream) -> io::Result<SyslogClient> {
-//        let tracking_stream = stream.try_clone()?;
-//        self.streams.push(tracking_stream);
-
-        Ok(SyslogClient::new(stream, self.running.clone()))
-    }
-
     fn run(&mut self, args: Args) -> io::Result<()> {
         info!("starting log sloth server");
         info!("concurrency={}", self.concurrency);
@@ -188,7 +181,8 @@ impl SyslogServer {
         let disable_retry = args.flag_disable_retry;
 
         let stats = if args.flag_enable_stats {
-            let (stats, _stats_thread) = Stats::spawn_thread(args.flag_influxdb_url, args.flag_stats_interval);
+            let (stats, _stats_thread) =
+                Stats::spawn_thread(args.flag_influxdb_url, args.flag_stats_interval);
             Some(stats)
         } else {
             None
@@ -200,8 +194,8 @@ impl SyslogServer {
                     stream
                         .set_nonblocking(false)
                         .expect("Could not set nonblocking mode on client stream");
-//                    let tracking_stream = stream.try_clone().expect("could not clone stream");
-//                    self.streams.push(tracking_stream);
+                    //                    let tracking_stream = stream.try_clone().expect("could not clone stream");
+                    //                    self.streams.push(tracking_stream);
 
                     let mut client = SyslogClient::new(stream, self.running.clone());
 
@@ -222,10 +216,7 @@ impl SyslogServer {
                         debug!("STARTING: thread for client {:?}", client);
                         #[cfg(target_os = "linux")]
                         {
-                            let name = format!(
-                                "{:?}",
-                                client.stream.peer_addr().unwrap()
-                            );
+                            let name = format!("{:?}", client.stream.peer_addr().unwrap());
                             prctl::set_name(&name[..]).unwrap();
                         }
                         let res = client.run(tx.clone(), stats);
@@ -279,7 +270,7 @@ pub fn kinesis_tx(
         #[cfg(target_os = "linux")]
         {
             let now = time::now().tm_sec;
-            let name = format!("k rx {}",now);
+            let name = format!("k rx {}", now);
             prctl::set_name(&name[..]).unwrap();
         }
         let puts = rx.chunks(500)
@@ -289,16 +280,25 @@ pub fn kinesis_tx(
                     stream_name: stream_name.clone(),
                 };
 
-                client.put_records(&input).then(|put_res| match put_res {
-                    Ok(res) => {
-                        trace!("match put_res: it worked");
-                        Ok(Ok(res))
+                if let Some(ref s) = stats {
+                    s.kinesis_inflight.fetch_add(1, Ordering::Relaxed);
+                }
+                client.put_records(&input).then(|put_res| {
+                    if let Some(ref s) = stats {
+                        s.kinesis_inflight.fetch_sub(1, Ordering::Relaxed);
                     }
-                    Err(err) => {
-                        trace!("match put_res: failed");
-                        Ok(Err((err, input)))
+                    match put_res {
+                        Ok(res) => {
+                            trace!("match put_res: it worked");
+                            Ok(Ok(res))
+                        }
+                        Err(err) => {
+                            trace!("match put_res: failed");
+                            Ok(Err((err, input)))
+                        }
                     }
-                })
+                }
+                )
             })
             .buffer_unordered(inflight);
 
@@ -422,7 +422,9 @@ impl SyslogClient {
                     stats.clients.fetch_add(1, Ordering::Relaxed);
                 }
                 stats.rx_bytes.fetch_add(line.len(), Ordering::Relaxed);
-                stats.tx_serialized_bytes.fetch_add(json_vecu8.len(), Ordering::Relaxed);
+                stats
+                    .tx_serialized_bytes
+                    .fetch_add(json_vecu8.len(), Ordering::Relaxed);
             }
 
             let partition_key = format!("{}", counter);
