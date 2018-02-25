@@ -5,3 +5,6 @@ authors = ["Xavier Lange <xrlange@gmail.com>"]
 
 [dependencies]
 ctrlc = "*"
+serde = "*"
+serde_derive = "*"
+serde-xml-rs = "*"
