@@ -44,7 +44,20 @@ named!(
     many0!(ws!(pair))
 );
 
-pub fn extract_kv(input: &str) -> Option<Vec<(&str, &str)>> {
+pub fn extract_kv(input: &str) -> Option<Vec<(String, String)>> {
+    match kv(input) {
+        IResult::Done(_, datum) => {
+            if datum.len() > 0 {
+                Some(datum.into_iter().map(|(k,v)| (k.into(),v.into())).collect())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+pub fn extract_kv_zc(input: &str) -> Option<Vec<(&str, &str)>> {
     match kv(input) {
         IResult::Done(_, datum) => {
             if datum.len() > 0 {

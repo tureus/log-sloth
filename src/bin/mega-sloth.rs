@@ -6,10 +6,16 @@ extern crate nom_syslog;
 extern crate pretty_bytes;
 
 #[macro_use]
+extern crate lazy_static;
+
+#[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
 
+extern crate tokio_core;
+extern crate tokio_io;
 extern crate futures;
+extern crate futures_cpupool;
 extern crate openssl_probe;
 extern crate rusoto_core;
 extern crate rusoto_kinesis;
@@ -22,12 +28,11 @@ extern crate time;
 
 extern crate log_sloth;
 
-use std::{env, io, thread};
+use std::{env, io};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{Ordering};
 
 use docopt::Docopt;
 
@@ -36,26 +41,36 @@ use nom::IResult;
 
 use pretty_bytes::converter::convert;
 
+use futures::{Stream,Future};
+use futures_cpupool::CpuPool;
+
+lazy_static! {
+    static ref CPU_POOL: CpuPool = {
+        CpuPool::new(4)
+    };
+}
+
 use rusoto_core::Region;
 use rusoto_core::reactor::{CredentialsProvider, RequestDispatcher};
 use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsError, PutRecordsInput,
                      PutRecordsOutput, PutRecordsRequestEntry};
 
 use log_sloth::stats::Stats;
-use log_sloth::fortigate_kv::extract_kv_zc;
+use log_sloth::fortigate_kv::extract_kv;
 use log_sloth::rename_thread;
 
 const USAGE: &str = "
 log-sloth.
 
 Usage:
-  log-sloth [--concurrency=N] [--disable-retry] [--enable-stats [--influxdb-url=URL] [--stats-interval=SEC]]
+  log-sloth [--bind=ADDR] [--concurrency=N] [--disable-retry] [--enable-stats [--influxdb-url=URL] [--stats-interval=SEC]]
   log-sloth (-h | --help)
   log-sloth --version
 
 Options:
   -h --help             Show this screen.
   --version             Show version.
+  --bind=<ADDR>         Listen to ADDR:IP [default: 127.0.0.1:1516]
   --concurrency=<kn>    Connections to Kinesis per client [default: 10]
   --enable-stats        Send stats to InfluxDB backend
   --influxdb-url=<url>  Target InfluxDB server [default: http://127.0.0.1:8086/write?db=telegraf]
@@ -66,6 +81,7 @@ Options:
 #[derive(Debug, Deserialize)]
 struct Args {
     pub flag_concurrency: usize,
+    pub flag_bind: String,
     pub flag_influxdb_url: String,
     pub flag_stats_interval: u64,
     pub flag_enable_stats: bool,
@@ -83,34 +99,15 @@ fn main() {
 
     if env::var("USER").unwrap() == "root"
         && (env::var("AWS_ACCESS_KEY_ID").is_err() || env::var("AWS_SECRET_ACCESS_KEY").is_err())
-    {
-        error!("if running as root, must set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY");
-        std::process::exit(1);
-    }
+        {
+            error!("if running as root, must set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY");
+            std::process::exit(1);
+        }
 
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-    ctrlc::set_handler(move || {
-        info!("shutting down syslog server");
-        r.store(false, Ordering::SeqCst);
-    }).expect("Error setting Ctrl-C handler");
+    let (stats, stats_thread) = Stats::spawn_thread(args.flag_influxdb_url.clone(), args.flag_stats_interval);
 
-    let server_running = running.clone();
-    let server = thread::spawn(move || {
-        rename_thread("acceptor");
-
-        let mut server = SyslogServer::new(server_running.clone(), args.flag_concurrency);
-        server.run(args).expect("syslog server died");
-    });
-
-    rename_thread("main");
-    info!("Waiting for Ctrl-C...");
-    while running.load(Ordering::SeqCst) {
-        thread::sleep(std::time::Duration::from_millis(500));
-    }
-    info!("Received Ctrl-C. Exiting...");
-
-    server.join().unwrap();
+    SyslogServer::new(args.flag_concurrency).run(args, stats);
+    stats_thread.join().unwrap();
 }
 
 // I don't want to leak ARNs in to public code, so this little ditty pulls the name out of AWS
@@ -143,7 +140,6 @@ fn get_kinesis_stream_name(thing: &DefaultKinesisClient) -> io::Result<String> {
 type DefaultKinesisClient = Arc<KinesisClient<CredentialsProvider, RequestDispatcher>>;
 
 pub struct SyslogServer {
-    pub running: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub streams: Vec<TcpStream>,
     pub listener: Option<TcpListener>,
     pub kinesis_client: DefaultKinesisClient,
@@ -151,11 +147,10 @@ pub struct SyslogServer {
 }
 
 impl SyslogServer {
-    fn new(running: Arc<AtomicBool>, concurrency: usize) -> Self {
+    fn new(concurrency: usize) -> Self {
         let kinesis = KinesisClient::simple(Region::UsWest2);
 
         Self {
-            running,
             streams: vec![],
             listener: None,
             kinesis_client: Arc::new(kinesis),
@@ -163,75 +158,50 @@ impl SyslogServer {
         }
     }
 
-    #[allow(dead_code)]
-    fn shutdown(&self) {
-        //        self.listener
-    }
+        fn run(&mut self, args: Args, stats: Arc<Stats>) {
+            info!("starting log sloth server");
+            info!("bind={} concurrency={}", args.flag_bind, self.concurrency);
 
-    fn run(&mut self, args: Args) -> io::Result<()> {
-        info!("starting log sloth server");
-        info!("concurrency={}", self.concurrency);
-        let listener = TcpListener::bind("0.0.0.0:1516")?;
-        listener.set_nonblocking(true)?;
+            use rusoto_core::reactor::DEFAULT_REACTOR;
+            let remote = DEFAULT_REACTOR.remote.clone();
 
-        let stream_name = get_kinesis_stream_name(&self.kinesis_client)?;
-        let disable_retry = args.flag_disable_retry;
+            let bind_addr = args.flag_bind.clone();
+            let stats = stats.clone();
 
-        let stats = if args.flag_enable_stats {
-            let (stats, _stats_thread) =
-                Stats::spawn_thread(args.flag_influxdb_url, args.flag_stats_interval);
-            Some(stats)
-        } else {
-            None
-        };
+            let f = remote.spawn(move|handle| {
+                let addr = bind_addr.parse().expect(&format!("could not parse addr {}", bind_addr));
+                let listener = tokio_core::net::TcpListener::bind(&addr, handle).unwrap();
 
-        loop {
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    stream
-                        .set_nonblocking(false)
-                        .expect("Could not set nonblocking mode on client stream");
-                    //                    let tracking_stream = stream.try_clone().expect("could not clone stream");
-                    //                    self.streams.push(tracking_stream);
-
-                    let mut client = SyslogClient::new(stream, self.running.clone());
-
-                    let stream_name = stream_name.clone();
-                    let inflight = self.concurrency;
+                listener.incoming().map_err(|e| {
+                    error!("incoming failure: {:?}", e);
+                }).for_each(move |(tcp_stream,sockaddr)| {
                     let stats = stats.clone();
-                    let kinesis_client = self.kinesis_client.clone();
-                    thread::spawn(move || {
-                        let tx = kinesis_tx(
-                            kinesis_client,
-                            stream_name.clone(),
-                            1,
-                            inflight,
-                            disable_retry,
-                            stats.clone(),
-                        );
+                    stats.clients.fetch_add(1, Ordering::Relaxed);
 
-                        debug!("STARTING: thread for client {:?}", client);
-                        rename_thread(&format!("{:?}", client.stream.peer_addr().unwrap()));
-                        let res = client.run(tx.clone(), stats);
-                        if res.is_err() {
-                            error!("STOPPING: thread for client ending with {:?}", res);
+                    let lines = tokio_io::io::lines(BufReader::new(tcp_stream));
+                    lines.map(move |l| {
+                        stats.rx_bytes.fetch_add(l.len(), Ordering::Relaxed);
+                        Ok(l)
+                    }).filter_map(|res : Result<String,io::Error>| match res {
+                        Ok(string) => Some(string),
+                        Err(e) => {
+                            error!("dropping line error: {:?}", e);
+                            None
                         }
-                    });
-                }
-                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Err(ref e) => {
-                    error!("not sure how to handle {:?}", e);
-                }
-            }
-
-            if !self.running.load(Ordering::SeqCst) {
-                break;
-            }
-        }
-
-        Ok(())
+                    }).map_err(|e| ()).chunks(500).for_each(|mut batch : Vec<String>| {
+                        info!("got a batch {:?}", batch.len());
+                        CPU_POOL.spawn_fn( ||{
+                            info!("hi from the pool {}", batch.len());
+                            let parsed: Vec<Log> = batch.into_iter().map(|x| SyslogClient::parse_syslog_line(&x[..]).unwrap())
+                                .collect();
+                            Ok::<_,()>(parsed)
+                        }).then(|res| { //  : Result<(Vec<(Log,&String)>,Vec<String>),()>
+                            info!("got res={:?}", res);
+                            Ok(())
+                        })
+                    })
+                })
+            });
     }
 }
 
@@ -374,82 +344,82 @@ impl SyslogClient {
         self.stream.shutdown(Shutdown::Both)
     }
 
-    fn run(
-        &mut self,
-        kinesis_stream: RecordsChannel,
-        stats: Option<Arc<Stats>>,
-    ) -> Result<(), io::Error> {
-        let kinesis_stream = kinesis_stream;
-        let addr = self.stream.peer_addr()?;
-        let bufr = BufReader::with_capacity(4 * 1024, &self.stream);
+//    fn run(
+//        &mut self,
+//        kinesis_stream: RecordsChannel,
+//        stats: Option<Arc<Stats>>,
+//    ) -> Result<(), io::Error> {
+//        let kinesis_stream = kinesis_stream;
+//        let addr = self.stream.peer_addr()?;
+//        let bufr = BufReader::with_capacity(4 * 1024, &self.stream);
+//
+//        use futures::Sink;
+//        let mut kinesis_wait = kinesis_stream.wait();
+//
+//        for (counter, maybe_line) in bufr.lines().enumerate() {
+//            let line: String = match maybe_line {
+//                Ok(l) => l,
+//                Err(e) => {
+//                    error!("error while reading lines. breaking out. got {:?}", e);
+//                    break;
+//                }
+//            };
+//            self.bytes_read += line.len();
+//            self.lines_read += 1;
+//            let mut log = SyslogClient::parse_syslog_line(&line[..])?;
+//            log.sender_ip = Some(addr);
+//            log.kv = extract_kv(log.message.unwrap());
+//            debug!("log: {:?}", log);
+//
+//            let mut json_vecu8 = serde_json::to_vec(&log)?;
+//            json_vecu8.push('\n' as u8);
+//
+//            // Only count clients who send at least 1 message. This stops counting ELB health checks.
+//            if let Some(ref stats) = stats {
+//                if self.lines_read == 1 {
+//                    stats.clients.fetch_add(1, Ordering::Relaxed);
+//                }
+//                stats.rx_bytes.fetch_add(line.len(), Ordering::Relaxed);
+//                stats
+//                    .tx_serialized_bytes
+//                    .fetch_add(json_vecu8.len(), Ordering::Relaxed);
+//            }
+//
+//            let partition_key = format!("{}", counter);
+//
+//            let record = PutRecordsRequestEntry {
+//                data: json_vecu8.clone(),
+//                explicit_hash_key: None,
+//                partition_key: partition_key.clone(),
+//            };
+//
+//            kinesis_wait
+//                .send(record)
+//                .unwrap_or_else(|e| error!("Wait#send error {:?}", e));
+//        }
+//
+//        if self.lines_read != 0 {
+//            info!(
+//                "{:?} done. {} bytes, {} lines",
+//                self,
+//                convert(self.bytes_read as f64),
+//                self.lines_read
+//            );
+//        }
+//        Ok(())
+//    }
 
-        use futures::Sink;
-        let mut kinesis_wait = kinesis_stream.wait();
-
-        for (counter, maybe_line) in bufr.lines().enumerate() {
-            let line: String = match maybe_line {
-                Ok(l) => l,
-                Err(e) => {
-                    error!("error while reading lines. breaking out. got {:?}", e);
-                    break;
-                }
-            };
-            self.bytes_read += line.len();
-            self.lines_read += 1;
-            let mut log = self.parse_syslog_line(&line[..])?;
-            log.sender_ip = Some(addr);
-            log.kv = extract_kv(log.message.unwrap());
-            debug!("log: {:?}", log);
-
-            let mut json_vecu8 = serde_json::to_vec(&log)?;
-            json_vecu8.push('\n' as u8);
-
-            // Only count clients who send at least 1 message. This stops counting ELB health checks.
-            if let Some(ref stats) = stats {
-                if self.lines_read == 1 {
-                    stats.clients.fetch_add(1, Ordering::Relaxed);
-                }
-                stats.rx_bytes.fetch_add(line.len(), Ordering::Relaxed);
-                stats
-                    .tx_serialized_bytes
-                    .fetch_add(json_vecu8.len(), Ordering::Relaxed);
-            }
-
-            let partition_key = format!("{}", counter);
-
-            let record = PutRecordsRequestEntry {
-                data: json_vecu8.clone(),
-                explicit_hash_key: None,
-                partition_key: partition_key.clone(),
-            };
-
-            kinesis_wait
-                .send(record)
-                .unwrap_or_else(|e| error!("Wait#send error {:?}", e));
-        }
-
-        if self.lines_read != 0 {
-            info!(
-                "{:?} done. {} bytes, {} lines",
-                self,
-                convert(self.bytes_read as f64),
-                self.lines_read
-            );
-        }
-        Ok(())
-    }
-
-    fn parse_syslog_line<'a>(&self, line: &'a str) -> Result<Log<'a>, io::Error> {
-        let res: IResult<&'a str, nom_syslog::Syslog3164Message<'a>> = parse_syslog(line);
+    fn parse_syslog_line(line: & str) -> Result<Log, io::Error> {
+        let res: IResult<&str, nom_syslog::Syslog3164Message> = parse_syslog(line);
         match res {
             IResult::Done(_, datum) => Ok(Log {
                 app: String::new(),
                 sender_ip: None,
-                kv: None,
-                message: Some(datum.msg),
-                host: Some(datum.host),
-                pri: Some(datum.pri),
-                tag: datum.tag,
+                kv: extract_kv(datum.msg),
+                message: Some(datum.msg.into()),
+                host: Some(datum.host.into()),
+                pri: Some(datum.pri.into()),
+                tag: None, // datum.tag.clone(),
                 ts: Some(datum.ts.to_utc().to_timespec().sec),
             }),
             IResult::Incomplete(a) => {
@@ -468,14 +438,14 @@ impl SyslogClient {
 }
 
 #[derive(PartialEq, Debug, Serialize)]
-pub struct Log<'a> {
+pub struct Log {
     pub app: String,
     pub sender_ip: Option<std::net::SocketAddr>,
-    pub kv: Option<Vec<(&'a str, &'a str)>>,
+    pub kv: Option<Vec<(String, String)>>,
 
-    pub pri: Option<&'a str>,
+    pub pri: Option<String>,
     pub ts: Option<i64>,
-    pub host: Option<&'a str>,
-    pub tag: Option<(&'a str, Option<&'a str>)>,
-    pub message: Option<&'a str>,
+    pub host: Option<String>,
+    pub tag: Option<(String, Option<String>)>,
+    pub message: Option<String>,
 }

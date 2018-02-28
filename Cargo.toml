@@ -11,13 +11,16 @@ serde_json = "*"
 nom-syslog = { path = "nom-syslog" }
 nom = "*"
 log = {version = "*", features = ["release_max_level_info"] }
+lazy_static = "*"
 env_logger = "*"
 pretty-bytes = "*"
-rusoto_core = { git = "https://github.com/rusoto/rusoto", branch = "master" }
-rusoto_kinesis = { git = "https://github.com/rusoto/rusoto", branch = "master" }
+rusoto_core = { path = "/Users/xlange/code/viasat/rusoto/rusoto/core" } # { git = "https://github.com/rusoto/rusoto", branch = "master" }
+rusoto_kinesis = { path = "/Users/xlange/code/viasat/rusoto/rusoto/services/kinesis" } # { git = "https://github.com/rusoto/rusoto", branch = "master" }
 prctl = "*"
 futures = "*"
+futures-cpupool = "*"
 tokio-core = "*"
+tokio-io = "*"
 time = "*"
 docopt = "0.8"
 openssl-probe = "0.1.2"
