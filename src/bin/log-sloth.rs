@@ -398,7 +398,7 @@ impl SyslogClient {
             self.lines_read += 1;
             let mut log = self.parse_syslog_line(&line[..])?;
             log.sender_ip = Some(addr);
-            log.kv = extract_kv(log.message.unwrap());
+            log.kv = extract_kv_zc(log.message.unwrap());
             debug!("log: {:?}", log);
 
             let mut json_vecu8 = serde_json::to_vec(&log)?;
