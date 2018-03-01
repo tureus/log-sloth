@@ -5,24 +5,25 @@ authors = ["Xavier Lange <xrlange@gmail.com>"]
 
 [dependencies]
 ctrlc = "*"
-serde = "*"
-serde_derive = "*"
-serde_json = "*"
-nom-syslog = { path = "nom-syslog" }
-nom = "*"
-log = {version = "*", features = ["release_max_level_info"] }
+docopt = "0.8"
 env_logger = "*"
+futures = "*"
+hostname = "0.1"
+hyper = "*"
+indexmap = { version = "*", features = ["serde-1"] }
+log = {version = "*", features = ["release_max_level_info"] }
+nom = "*"
+nom-syslog = { path = "nom-syslog" }
+openssl-probe = "0.1.2"
+prctl = "*"
 pretty-bytes = "*"
 rusoto_core = { git = "https://github.com/rusoto/rusoto", branch = "master" }
 rusoto_kinesis = { git = "https://github.com/rusoto/rusoto", branch = "master" }
-prctl = "*"
-futures = "*"
-tokio-core = "*"
+serde = "*"
+serde_derive = "*"
+serde_json = "*"
 time = "*"
-docopt = "0.8"
-openssl-probe = "0.1.2"
-hostname = "0.1"
-hyper = "*"
+tokio-core = "*"
 
 [profile.release]
 lto = true

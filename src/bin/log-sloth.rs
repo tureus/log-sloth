@@ -8,6 +8,7 @@ extern crate pretty_bytes;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
+extern crate indexmap;
 
 extern crate futures;
 extern crate openssl_probe;
@@ -42,7 +43,7 @@ use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsError, 
                      PutRecordsOutput, PutRecordsRequestEntry};
 
 use log_sloth::stats::Stats;
-use log_sloth::fortigate_kv::extract_kv;
+use log_sloth::fortigate_kv::extract_kv_to_object;
 use log_sloth::rename_thread;
 
 const USAGE: &str = "
@@ -398,7 +399,7 @@ impl SyslogClient {
             self.lines_read += 1;
             let mut log = self.parse_syslog_line(&line[..])?;
             log.sender_ip = Some(addr);
-            log.kv = extract_kv(log.message.unwrap());
+            log.kv = extract_kv_to_object(log.message.unwrap());
             debug!("log: {:?}", log);
 
             let mut json_vecu8 = serde_json::to_vec(&log)?;
@@ -471,7 +472,7 @@ impl SyslogClient {
 pub struct Log<'a> {
     pub app: String,
     pub sender_ip: Option<std::net::SocketAddr>,
-    pub kv: Option<Vec<(&'a str, &'a str)>>,
+    pub kv: Option<indexmap::IndexMap<String,String>>,
 
     pub pri: Option<&'a str>,
     pub ts: Option<i64>,
