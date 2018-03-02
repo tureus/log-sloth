@@ -43,12 +43,13 @@ impl Stats {
 
             loop {
                 let series = stats.series(&hostname);
-                let mut request = Request::new(Method::Post, influxdb_uri.clone());
+                let mut request = Request::new(
+                    Method::Post,
+                    influxdb_uri.clone()
+                );
                 request.set_body(series);
-                debug!("influxdb request={:?}", request);
 
                 let future = client.request(request).and_then(|res| {
-                    debug!("influxdb response status={}", res.status());
                     res.body().concat2()
                 });
 

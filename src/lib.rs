@@ -15,6 +15,7 @@ extern crate nom;
 
 pub mod stats;
 pub mod fortigate_kv;
+pub mod max_size_chunk;
 
 #[cfg(target_os = "linux")]
 pub fn rename_thread(input: &str) {
