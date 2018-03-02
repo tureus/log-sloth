@@ -217,7 +217,7 @@ fn entries(batch: Vec<String>) -> Vec<PutRecordsRequestEntry> {
         .enumerate()
         .map(|(i, data)| {
             let total_bytes = data.iter().map(|d| d.len()).sum();
-            let mut buf : Vec<u8> = Vec::with_capacity(total_bytes);
+            let mut buf : Vec<u8> = Vec::with_capacity(total_bytes+100);
             for d in data {
                 buf.copy_from_slice(&d[..])
             };
