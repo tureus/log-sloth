@@ -14,8 +14,8 @@ log = {version = "*", features = ["release_max_level_info"] }
 lazy_static = "*"
 env_logger = "*"
 pretty-bytes = "*"
-rusoto_core = { path = "/Users/xlange/code/viasat/rusoto/rusoto/core" } # { git = "https://github.com/rusoto/rusoto", branch = "master" }
-rusoto_kinesis = { path = "/Users/xlange/code/viasat/rusoto/rusoto/services/kinesis" } # { git = "https://github.com/rusoto/rusoto", branch = "master" }
+rusoto_core = { git = "https://github.com/tureus/rusoto", branch = "master" } # { path = "/Users/xlange/code/viasat/rusoto/rusoto/core" }
+rusoto_kinesis = { git = "https://github.com/tureus/rusoto", branch = "master" } # { path = "/Users/xlange/code/viasat/rusoto/rusoto/services/kinesis" }
 prctl = "*"
 futures = "*"
 futures-cpupool = "*"
