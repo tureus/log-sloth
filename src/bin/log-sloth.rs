@@ -217,10 +217,16 @@ fn entries(batch: Vec<String>) -> Vec<PutRecordsRequestEntry> {
         .enumerate()
         .map(|(i, data)| {
             let total_bytes = data.iter().map(|d| d.len()).sum();
-            let mut buf : Vec<u8> = Vec::with_capacity(total_bytes);
+
+            let mut buf : Vec<u8> = vec![0; total_bytes];
+            let mut start = 0;
             for d in data {
-                buf.copy_from_slice(&d[..])
+                let sub_buf = &mut buf[start .. start+d.len()];
+                assert_eq!(sub_buf.len(), d.len());
+                sub_buf.copy_from_slice(&d[..]);
+                start += d.len();
             };
+
             STATS.tx_serialized_bytes.fetch_add(buf.len(), Ordering::Relaxed);
             PutRecordsRequestEntry {
                 data: buf,
