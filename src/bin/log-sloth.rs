@@ -220,6 +220,7 @@ fn entries(batch: Vec<String>) -> Vec<PutRecordsRequestEntry> {
 
             let mut buf : Vec<u8> = vec![0; total_bytes];
             let mut start = 0;
+
             for d in data {
                 let sub_buf = &mut buf[start .. start+d.len()];
                 assert_eq!(sub_buf.len(), d.len());
