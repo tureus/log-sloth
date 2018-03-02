@@ -1,14 +1,20 @@
 use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 use hostname;
+use std::io;
 use std::thread;
 use std::time::Duration;
 use time;
+use std;
 use std::sync::Arc;
 use std::default::Default;
 
+use rusoto_core::reactor::DEFAULT_REACTOR;
+
 use futures::{Future, Stream};
 use hyper::{Client, Method, Request, Uri};
-use tokio_core::reactor::Core;
+use tokio_core::reactor::{ Core, Timeout, Handle };
+
+use futures::future::{loop_fn, Loop};
 
 use super::rename_thread;
 
@@ -21,7 +27,33 @@ pub struct Stats {
     pub kinesis_inflight: AtomicIsize,
 }
 
+//fn loopie(handle: &Handle) -> Loop<i32,()> {
+//    loop_fn(10, |counter| {
+//        error!("counter: {}", counter);
+//
+//        let timeout = Timeout::new(Duration::from_secs(counter), handle).unwrap();
+//
+//        timeout.map(move|val| -> Loop<_,u64> {
+//            info!("got val: {:?}", val);
+//            Loop::Continue(0)
+//        })
+//    })
+//}
+
 impl Stats {
+    pub fn spawn_loop(influxdb_url: String, interval_sec: u64) {
+
+//        DEFAULT_REACTOR.remote.spawn(|handle: &Handle| {
+//            loop_fn(10, |counter| {
+//                let timeout = Timeout::new(Duration::from_secs(counter), handle).unwrap();
+//                timeout.then(move |val: Result<(),io::Error>| {
+//                    Ok::<_,()>(Loop::Continue(1))
+//                })
+//            })
+//        });
+
+    }
+
     pub fn spawn_thread(influxdb_url: String, interval_sec: u64) -> (Arc<Self>, thread::JoinHandle<()>) {
         info!("spawning stats thread influxdb_url={} interval_sec={}", influxdb_url, interval_sec);
         let stats = Arc::new(Self::new());

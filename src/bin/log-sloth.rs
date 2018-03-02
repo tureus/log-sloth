@@ -159,6 +159,7 @@ pub struct SyslogServer {}
 
 impl SyslogServer {
     fn run(args: Args) {
+        log_sloth::stats::Stats::spawn_loop(args.flag_influxdb_url.clone(), args.flag_stats_interval);
         info!("starting log sloth server: bind={} concurrency={} stream-name={}", args.flag_bind, args.flag_concurrency, &STREAM_NAME[..]);
 
         let bind_addr = args.flag_bind.clone();
@@ -212,7 +213,7 @@ fn entries(batch: Vec<String>) -> Vec<PutRecordsRequestEntry> {
             data
         }).collect();
 
-    (&intermediate_batch).chunks(RECS_LOAD_FACTOR)
+    intermediate_batch.chunks(RECS_LOAD_FACTOR)
         .enumerate()
         .map(|(i, data)| {
             let total_bytes = data.iter().map(|d| d.len()).sum();

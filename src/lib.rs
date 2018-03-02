@@ -5,6 +5,7 @@ extern crate log;
 extern crate futures;
 extern crate hyper;
 extern crate tokio_core;
+extern crate rusoto_core;
 
 extern crate time;
 
