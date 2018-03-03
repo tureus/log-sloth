@@ -75,7 +75,10 @@ lazy_static! {
             std::process::exit(1);
         }
 
-        KinesisClient::simple(Region::UsWest2)
+        KinesisClient::simple(Region::Custom {
+            name: "local-stack-1".into(),
+            endpoint: "http://localhost:4568/".into(),
+        })
     };
 
     static ref STREAM_NAME: String = {
