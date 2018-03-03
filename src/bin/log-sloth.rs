@@ -171,7 +171,8 @@ impl SyslogServer {
             listener
                 .incoming()
                 // .from_err::<Box<std::error::Error + Send + Sync + 'static>>()
-                .map(|(tcp_stream, _)| {
+                .map(|(tcp_stream, addr)| {
+                    info!("new connection! {:?}", addr);
                     STATS.clients.fetch_add(1, Ordering::Relaxed);
                     tokio_io::io::lines(BufReader::new(tcp_stream))
                         .inspect(|l| {
@@ -184,11 +185,17 @@ impl SyslogServer {
                 .and_then(|batch| CPU_POOL.spawn_fn(|| Ok(entries(batch))))
                 .map(|records| {
                     STATS.kinesis_inflight.fetch_add(1, Ordering::Relaxed);
-                    Ok(KINESIS.put_records(&PutRecordsInput {
+                    KINESIS.put_records(&PutRecordsInput {
                             records: records,
                             stream_name: STREAM_NAME.clone(),
-                    }).then(inspect_kinesis_response))
+                    }).map_err(|e|
+                        error!("awfulness {:?}", e)
+                    ).then(|_| {
+                        info!("NEAT");
+                        Ok(())
+                    })
                 })
+                .map_err(|e| error!("bzzzt: {:?}", e))
                 .buffer_unordered(args.flag_concurrency)
                 .for_each(|_| Ok(()) )
                 .map_err(|e| error!("listener error: {:?}", e))
@@ -197,6 +204,7 @@ impl SyslogServer {
 }
 
 fn entries(batch: Vec<String>) -> Vec<PutRecordsRequestEntry> {
+    info!("entries batch size {}", batch.len());
     // TODO: serialize in chunks to as writer handle of the buf
     let intermediate_batch : Vec<Vec<u8>> = batch
         .into_iter()
@@ -238,7 +246,13 @@ fn entries(batch: Vec<String>) -> Vec<PutRecordsRequestEntry> {
         .collect()
 }
 
+fn inspect_kinesis_success(response: PutRecordsOutput) -> Result<(),()> {
+    info!("hey hey hey!!!!");
+    Ok(())
+}
+
 fn inspect_kinesis_response(response: Result<PutRecordsOutput,PutRecordsError>) -> Result<(),()> {
+    debug!("response Ok: {}", response.is_ok());
     STATS.kinesis_inflight.fetch_sub(1, Ordering::Relaxed);
     match response {
         Ok(put) => {
