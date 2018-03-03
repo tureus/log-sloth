@@ -188,17 +188,15 @@ impl SyslogServer {
                     KINESIS.put_records(&PutRecordsInput {
                             records: records,
                             stream_name: STREAM_NAME.clone(),
-                    }).map_err(|e|
-                        error!("awfulness {:?}", e)
-                    ).then(|_| {
-                        info!("NEAT");
-                        Ok(())
                     })
                 })
                 .map_err(|e| error!("bzzzt: {:?}", e))
+                .map(|_| {
+                    STATS.kinesis_inflight.fetch_sub(1, Ordering::Relaxed);
+                    Ok(())
+                })
                 .buffer_unordered(args.flag_concurrency)
-                .for_each(|_| Ok(()) )
-                .map_err(|e| error!("listener error: {:?}", e))
+                .for_each(|_| Ok(()) ) // Converts stream to future!
         });
     }
 }
