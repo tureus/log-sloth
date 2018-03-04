@@ -60,11 +60,13 @@ lazy_static! {
     };
 
     static ref STATS: Arc<Stats> = {
-        let args: Args = Docopt::new(USAGE)
-            .and_then(|d| d.deserialize())
-            .unwrap_or_else(|e| e.exit());
-        let (stats, _) = Stats::spawn_thread(args.flag_influxdb_url.clone(), args.flag_stats_interval);
-        stats
+        use std::default::Default;
+        Arc::new(Default::default())
+//        let args: Args = Docopt::new(USAGE)
+//            .and_then(|d| d.deserialize())
+//            .unwrap_or_else(|e| e.exit());
+//        let (stats, _) = Stats::spawn_thread(args.flag_influxdb_url.clone(), args.flag_stats_interval);
+//        stats
     };
 
     static ref KINESIS: DefaultKinesisClient = {
@@ -185,26 +187,30 @@ impl SyslogServer {
                         .chunks(RECS_LOAD_FACTOR * RECS_PER_REQ)
                 })
                 .flatten()
-                .and_then(|batch| CPU_POOL.spawn_fn(|| Ok(entries(batch))))
-                .map(|records| {
+                .map_err(|_| ())
+                .and_then(|batch| {
                     STATS.kinesis_inflight.fetch_add(1, Ordering::Relaxed);
+
+                    CPU_POOL.spawn_fn(move|| Ok::<_,()>(entries(&batch)))
+                })
+                .and_then(|records| {
                     KINESIS.put_records(&PutRecordsInput {
-                            records: records,
-                            stream_name: STREAM_NAME.clone(),
+                        records,
+                        stream_name: STREAM_NAME.clone(),
                     })
+                    .then(|bzzt| Ok(info!("hey!")))
+                    .map_err(|_: PutRecordsError| error!("hmm, bad PUT!"))
+                    .map(|_| Ok(info!("what")))
                 })
-                .map_err(|e| error!("bzzzt: {:?}", e))
-                .map(|_| {
-                    STATS.kinesis_inflight.fetch_sub(1, Ordering::Relaxed);
-                    Ok(())
-                })
+                .map_err(|_| info!("sup"))
+                .map(|_: Result<(),()>| Ok(info!("neat")))
                 .buffer_unordered(args.flag_concurrency)
                 .for_each(|_| Ok(()) ) // Converts stream to future!
         });
     }
 }
 
-fn entries(batch: Vec<String>) -> Vec<PutRecordsRequestEntry> {
+fn entries(batch: &[String]) -> Vec<PutRecordsRequestEntry> {
     info!("entries batch size {}", batch.len());
     // TODO: serialize in chunks to as writer handle of the buf
     let intermediate_batch : Vec<Vec<u8>> = batch
