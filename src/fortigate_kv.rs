@@ -1,5 +1,10 @@
 use nom::IResult;
 
+lazy_static! {
+    static ref DATE_KEY : String = String::from("date");
+    static ref TIME_KEY : String = String::from("time");
+}
+
 fn quote_delim(ch: char) -> bool {
     ch == '"'
 }
@@ -60,7 +65,37 @@ pub fn extract_kv(input: &str) -> Option<Vec<(&str, &str)>> {
 use indexmap::IndexMap;
 pub fn extract_kv_to_object(input: &str) -> Option<IndexMap<String,String>> {
     let tuples = extract_kv(input)?;
-    let map : IndexMap<String,String> = tuples.into_iter().map(|(k,v)| (k.to_owned(), v.to_owned())).collect();
+    let mut map : IndexMap<String,String> = tuples.into_iter().map(|(k,v)| (k.to_owned(), v.to_owned())).collect();
+
+    if map.len() != 0 {
+        let date_key: &'static String = &DATE_KEY;
+        let time_key: &'static String = &TIME_KEY;
+        let timestamp = {
+            let get_date = map.get(date_key);
+            let get_time = map.get(time_key);
+            if let Some(date) = get_date {
+                if let Some(time) = get_time {
+                    // "date":"2018-03-06" "time":"05:00:32"
+                    Some(format!("{} {}", date, time))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some(ts) = timestamp {
+            map.insert("timestamp".into(), ts);
+            map.remove(date_key);
+            map.remove(time_key);
+        };
+
+        Some(kv)
+    } else {
+        None
+    };
+
     if map.len() == 0 {
         None
     } else {
@@ -117,4 +152,16 @@ fn test_extract_kv_to_object_fancy() {
     use serde_json;
     let json = serde_json::to_string(&map).unwrap();
     assert_eq!(&json[..], r#"{"a":"b is your friend","c":"d"}"#);
+}
+
+
+#[test]
+fn test_extract_kv_to_object_has_timestamp() {
+    let res: Option<IndexMap<String,String>> = extract_kv_to_object("date=2018-02-23 time=20:21:47 logver=54");
+    assert!(res.is_some());
+
+    let map = res.unwrap();
+    use serde_json;
+    let json = serde_json::to_string(&map).unwrap();
+    assert_eq!(&json[..], r#"{"timestamp":"2018-02-23 20:21:47","logver":"54"}"#);
 }

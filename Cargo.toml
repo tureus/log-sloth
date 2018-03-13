@@ -11,6 +11,7 @@ futures = "*"
 hostname = "0.1"
 hyper = "*"
 indexmap = { version = "*", features = ["serde-1"] }
+lazy_static = "*"
 log = {version = "*", features = ["release_max_level_info"] }
 nom = "*"
 nom-syslog = { path = "nom-syslog" }

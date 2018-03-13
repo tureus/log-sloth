@@ -17,10 +17,12 @@ extern crate serde_json;
 #[macro_use]
 extern crate nom;
 
+#[macro_use]
+extern crate lazy_static;
+
 pub mod stats;
 pub mod fortigate_kv;
 
-#[warn(unused_variables)]
 pub fn rename_thread(input: &str) {
     #[cfg(target_os = "linux")]
     prctl::set_name(input).unwrap();
