@@ -101,7 +101,10 @@ fn main() {
         rename_thread("acceptor");
 
         let mut server = SyslogServer::new(server_running.clone(), args.flag_concurrency);
-        server.run(args).expect("syslog server died");
+        match server.run(args) {
+            Ok(()) => info!("server exited gracefully"),
+            Err(e) => error!("server exited with error {:?}", e)
+         };
     });
 
     rename_thread("main");
@@ -189,9 +192,8 @@ impl SyslogServer {
         loop {
             match listener.accept() {
                 Ok((stream, _)) => {
-                    stream
-                        .set_nonblocking(false)
-                        .expect("Could not set nonblocking mode on client stream");
+                    let nb_res = stream
+                        .set_nonblocking(false)?;
                     //                    let tracking_stream = stream.try_clone().expect("could not clone stream");
                     //                    self.streams.push(tracking_stream);
 
@@ -212,7 +214,9 @@ impl SyslogServer {
                         );
 
                         debug!("STARTING: thread for client {:?}", client);
-                        rename_thread(&format!("{:?}", client.stream.peer_addr().unwrap()));
+                        if let Ok(peer_addr) = client.stream.peer_addr() {
+                            rename_thread(&format!("{:?}", client.stream.peer_addr().unwrap()));
+                        }
                         let res = client.run(tx.clone(), stats);
                         if res.is_err() {
                             error!("STOPPING: thread for client ending with {:?}", res);
@@ -232,6 +236,7 @@ impl SyslogServer {
             }
         }
 
+        info!("leaving the acceptor loop");
         Ok(())
     }
 }
