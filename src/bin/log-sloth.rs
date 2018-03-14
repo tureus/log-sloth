@@ -215,7 +215,7 @@ impl SyslogServer {
 
                         debug!("STARTING: thread for client {:?}", client);
                         if let Ok(peer_addr) = client.stream.peer_addr() {
-                            rename_thread(&format!("{:?}", client.stream.peer_addr().unwrap()));
+                            rename_thread(&format!("{:?}", peer_addr));
                         }
                         let res = client.run(tx.clone(), stats);
                         if res.is_err() {
