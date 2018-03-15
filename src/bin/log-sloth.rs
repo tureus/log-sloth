@@ -46,7 +46,7 @@ use tokio_core::reactor::Handle;
 
 use rusoto_core::{Region};
 use rusoto_core::reactor::{CredentialsProvider, RequestDispatcher, DEFAULT_REACTOR};
-use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsError, /* PutRecordsInput, */
+use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsError, PutRecordsInput,
                      PutRecordsOutput, PutRecordsRequestEntry};
 
 use log_sloth::stats::Stats;
@@ -103,7 +103,7 @@ Options:
   --stats-interval=<s>  Stats interval in seconds [default: 15]
 ";
 
-const RECS_LOAD_FACTOR : usize = 10; // number of messages per record
+const RECS_LOAD_FACTOR : usize = 1; // number of messages per record
 const RECS_PER_REQ : usize = 500; // API limit on records per request
 
 #[derive(Debug, Deserialize)]
@@ -184,46 +184,67 @@ impl SyslogServer {
         info!("starting log sloth server: bind={} concurrency={} stream-name={}", args.flag_bind, args.flag_concurrency, &STREAM_NAME[..]);
 
         let bind_addr = args.flag_bind.clone();
+        let concurrency = args.flag_concurrency;
 
         DEFAULT_REACTOR.remote.spawn(move |handle| {
             let addr = bind_addr.parse().expect(&format!("could not parse addr {}", bind_addr));
             let listener = tokio_core::net::TcpListener::bind(&addr, handle).unwrap();
 
-//            let (records_tx,records_rx) = channel(100);
-//            let records_rx_task = records_rx.
-//                for_each(|batch| {
-//                    info!("going to send stuff off to AWS! {}", batch.len());
-//                    Ok(())
-//                });
+            let (records_tx,records_rx) = channel(100);
+            let records_rx_task = records_rx
+                .map(|batch: Vec<PutRecordsRequestEntry>| {
+                    info!("going to send stuff off to AWS! {}", batch.len());
+                    let input = PutRecordsInput {
+                        records: batch,
+                        stream_name: STREAM_NAME.clone(),
+                    };
+
+                    KINESIS.put_records(&input)
+                        .then(|res| {
+                            if res.is_err() {
+                                error!("failed to send data {:?}", res);
+                            }
+                            Ok(())
+                        })
+                })
+                .buffer_unordered(concurrency)
+                .for_each(|_| {
+                    info!("another one bit the dust");
+                    Ok(())
+                });
 
             let (strings_tx,strings_rx) = channel(3000);
             let strings_rx_task = strings_rx
-                .chunks(1500)
+                .chunks(RECS_PER_REQ*RECS_LOAD_FACTOR)
                 .and_then(|batch| {
                     CPU_POOL.spawn_fn(move || Ok(entries(&batch[..])))
-                }).and_then(|_ : Vec<PutRecordsRequestEntry>| {
-                    info!("hey, chunkie!");
-                    Ok(())
-                }).for_each(|_| Ok(()));
+                })
+                .forward(
+                    records_tx.sink_map_err(|e| () )
+                );
 
             let server_task = listener
                 .incoming()
                 .map_err(|_: std::io::Error| ())
                 .zip(repeat(strings_tx))
                 .for_each(|((tcp_stream, addr),tx_stream)| {
-                    info!("new connection! {:?}", addr);
                     Ok(SyslogServer::spawn_client(tcp_stream,tx_stream))
                 });
 
-            server_task.join(strings_rx_task).map(|_| ())
+            server_task
+                .join(strings_rx_task)
+                .join(records_rx_task)
+                .map_err(|e| {
+                    error!("one of the conjoined tasked had an error: {:?}", e);
+                })
+                .map(|_| ())
         });
     }
 }
 
 fn entries(batch: &[String]) -> Vec<PutRecordsRequestEntry> {
-    info!("entries batch size {}", batch.len());
     // TODO: serialize in chunks to as writer handle of the buf
-    let intermediate_batch : Vec<Vec<u8>> = batch
+    let record_line_batches : Vec<Vec<u8>> = batch
         .into_iter()
         .filter_map(|message| match parse_syslog_line(&message[..]) {
             Ok(log) => Some(log),
@@ -238,15 +259,15 @@ fn entries(batch: &[String]) -> Vec<PutRecordsRequestEntry> {
             data
         }).collect();
 
-    intermediate_batch.chunks(RECS_LOAD_FACTOR)
+    record_line_batches.chunks(RECS_LOAD_FACTOR)
         .enumerate()
-        .map(|(i, data)| {
-            let total_bytes = data.iter().map(|d| d.len()).sum();
+        .map(|(i, record_lines)| {
+            let total_bytes = record_lines.iter().map(|d| d.len()).sum();
 
             let mut buf : Vec<u8> = vec![0; total_bytes];
             let mut start = 0;
 
-            for d in data {
+            for d in record_lines {
                 let sub_buf = &mut buf[start .. start+d.len()];
                 assert_eq!(sub_buf.len(), d.len());
                 sub_buf.copy_from_slice(&d[..]);
