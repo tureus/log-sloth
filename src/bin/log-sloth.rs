@@ -38,9 +38,11 @@ use docopt::Docopt;
 use nom_syslog::parse_syslog;
 use nom::IResult;
 
-use futures::{Sink,Stream,Future};
+use futures::{Sink,Stream,Future,lazy};
+use futures::stream::repeat;
 use futures::sync::mpsc::{ Sender, Receiver, channel };
 use futures_cpupool::{ CpuPool, Builder };
+use tokio_core::reactor::Handle;
 
 use rusoto_core::{Region};
 use rusoto_core::reactor::{CredentialsProvider, RequestDispatcher, DEFAULT_REACTOR};
@@ -173,9 +175,7 @@ impl SyslogServer {
                         })
                 )
                 .map_err(|_| ())
-                .and_then(|_| {
-                    Ok(())
-                })
+                .and_then(|_| Ok(()) )
         });
     }
 
@@ -189,26 +189,33 @@ impl SyslogServer {
             let addr = bind_addr.parse().expect(&format!("could not parse addr {}", bind_addr));
             let listener = tokio_core::net::TcpListener::bind(&addr, handle).unwrap();
 
-            let (tx,rx) :(Sender<String>, Receiver<String>) = channel(1000);
-            let rx_task = rx.for_each(|_| {
-                info!("rx got something!");
-                Ok(())
-            });
+//            let (records_tx,records_rx) = channel(100);
+//            let records_rx_task = records_rx.
+//                for_each(|batch| {
+//                    info!("going to send stuff off to AWS! {}", batch.len());
+//                    Ok(())
+//                });
 
-            let mut tx_stream = futures::stream::repeat(tx);
+            let (strings_tx,strings_rx) = channel(3000);
+            let strings_rx_task = strings_rx
+                .chunks(1500)
+                .and_then(|batch| {
+                    CPU_POOL.spawn_fn(move || Ok(entries(&batch[..])))
+                }).and_then(|_ : Vec<PutRecordsRequestEntry>| {
+                    info!("hey, chunkie!");
+                    Ok(())
+                }).for_each(|_| Ok(()));
 
             let server_task = listener
                 .incoming()
                 .map_err(|_: std::io::Error| ())
-                .zip(tx_stream)
+                .zip(repeat(strings_tx))
                 .for_each(|((tcp_stream, addr),tx_stream)| {
                     info!("new connection! {:?}", addr);
-                    SyslogServer::spawn_client(tcp_stream, tx_stream);
-
-                    Ok(())
+                    Ok(SyslogServer::spawn_client(tcp_stream,tx_stream))
                 });
 
-            server_task.join(rx_task).map(|_| ())
+            server_task.join(strings_rx_task).map(|_| ())
         });
     }
 }
