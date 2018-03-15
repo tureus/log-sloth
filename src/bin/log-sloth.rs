@@ -38,12 +38,13 @@ use docopt::Docopt;
 use nom_syslog::parse_syslog;
 use nom::IResult;
 
-use futures::{Stream,Future};
+use futures::{Sink,Stream,Future};
+use futures::sync::mpsc::{ Sender, Receiver, channel };
 use futures_cpupool::{ CpuPool, Builder };
 
 use rusoto_core::{Region};
 use rusoto_core::reactor::{CredentialsProvider, RequestDispatcher, DEFAULT_REACTOR};
-use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsError, PutRecordsInput,
+use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsError, /* PutRecordsInput, */
                      PutRecordsOutput, PutRecordsRequestEntry};
 
 use log_sloth::stats::Stats;
@@ -62,11 +63,6 @@ lazy_static! {
     static ref STATS: Arc<Stats> = {
         use std::default::Default;
         Arc::new(Default::default())
-//        let args: Args = Docopt::new(USAGE)
-//            .and_then(|d| d.deserialize())
-//            .unwrap_or_else(|e| e.exit());
-//        let (stats, _) = Stats::spawn_thread(args.flag_influxdb_url.clone(), args.flag_stats_interval);
-//        stats
     };
 
     static ref KINESIS: DefaultKinesisClient = {
@@ -150,19 +146,39 @@ fn get_kinesis_stream_name(thing: &DefaultKinesisClient) -> io::Result<String> {
         }
     };
 
-    if streams.stream_names.len() > 1 {
+    if streams.stream_names.len() != 1 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "I can only auto-discover one Kinesis stream",
+            format!("I can only auto-discover 1 Kinesis stream, you have {}", streams.stream_names.len()),
         ));
     }
 
     Ok(streams.stream_names[0].clone())
 }
 
+
+pub struct SyslogClient<A> {
+    pub tx: std::rc::Rc<Sender<A>>
+}
+
 pub struct SyslogServer {}
 
 impl SyslogServer {
+    fn spawn_client(tcp_stream: tokio_core::net::TcpStream, tx: Sender<String>) {
+        DEFAULT_REACTOR.remote.spawn(move|_| {
+            tokio_io::io::lines(BufReader::new(tcp_stream))
+                .forward(
+                    tx.sink_map_err(|e| {
+                            std::io::Error::new(std::io::ErrorKind::Other, format!("Could not forward message from server to connection {:?}", e))
+                        })
+                )
+                .map_err(|_| ())
+                .and_then(|_| {
+                    Ok(())
+                })
+        });
+    }
+
     fn run(args: Args) {
         log_sloth::stats::Stats::spawn_loop(args.flag_influxdb_url.clone(), args.flag_stats_interval);
         info!("starting log sloth server: bind={} concurrency={} stream-name={}", args.flag_bind, args.flag_concurrency, &STREAM_NAME[..]);
@@ -173,39 +189,26 @@ impl SyslogServer {
             let addr = bind_addr.parse().expect(&format!("could not parse addr {}", bind_addr));
             let listener = tokio_core::net::TcpListener::bind(&addr, handle).unwrap();
 
-            listener
-                .incoming()
-                // .from_err::<Box<std::error::Error + Send + Sync + 'static>>()
-                .map(|(tcp_stream, addr)| {
-                    info!("new connection! {:?}", addr);
-                    STATS.clients.fetch_add(1, Ordering::Relaxed);
-                    tokio_io::io::lines(BufReader::new(tcp_stream))
-                        .inspect(|l| {
-                            STATS.rx_bytes.fetch_add(l.len(), Ordering::Relaxed);
-                        })
-                        // .from_err::<Box<std::error::Error + Send + Sync + 'static>>()
-                        .chunks(RECS_LOAD_FACTOR * RECS_PER_REQ)
-                })
-                .flatten()
-                .map_err(|_| ())
-                .and_then(|batch| {
-                    STATS.kinesis_inflight.fetch_add(1, Ordering::Relaxed);
+            let (tx,rx) :(Sender<String>, Receiver<String>) = channel(1000);
+            let rx_task = rx.for_each(|_| {
+                info!("rx got something!");
+                Ok(())
+            });
 
-                    CPU_POOL.spawn_fn(move|| Ok::<_,()>(entries(&batch)))
-                })
-                .and_then(|records| {
-                    KINESIS.put_records(&PutRecordsInput {
-                        records,
-                        stream_name: STREAM_NAME.clone(),
-                    })
-                    .then(|bzzt| Ok(info!("hey!")))
-                    .map_err(|_: PutRecordsError| error!("hmm, bad PUT!"))
-                    .map(|_| Ok(info!("what")))
-                })
-                .map_err(|_| info!("sup"))
-                .map(|_: Result<(),()>| Ok(info!("neat")))
-                .buffer_unordered(args.flag_concurrency)
-                .for_each(|_| Ok(()) ) // Converts stream to future!
+            let mut tx_stream = futures::stream::repeat(tx);
+
+            let server_task = listener
+                .incoming()
+                .map_err(|_: std::io::Error| ())
+                .zip(tx_stream)
+                .for_each(|((tcp_stream, addr),tx_stream)| {
+                    info!("new connection! {:?}", addr);
+                    SyslogServer::spawn_client(tcp_stream, tx_stream);
+
+                    Ok(())
+                });
+
+            server_task.join(rx_task).map(|_| ())
         });
     }
 }
