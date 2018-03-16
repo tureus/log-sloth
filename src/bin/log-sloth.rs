@@ -4,6 +4,7 @@ extern crate ctrlc;
 extern crate nom;
 extern crate nom_syslog;
 extern crate pretty_bytes;
+extern crate indexmap;
 
 #[macro_use]
 extern crate lazy_static;
@@ -50,7 +51,7 @@ use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsError, 
                      PutRecordsOutput, PutRecordsRequestEntry};
 
 use log_sloth::stats::Stats;
-use log_sloth::fortigate_kv::extract_kv;
+use log_sloth::fortigate_kv::extract_kv_to_object;
 
 type DefaultKinesisClient = KinesisClient<CredentialsProvider, RequestDispatcher>;
 
@@ -318,7 +319,7 @@ fn parse_syslog_line(line: & str) -> Result<Log, io::Error> {
         IResult::Done(_, datum) => Ok(Log {
             app: String::new(),
             sender_ip: None,
-            kv: extract_kv(datum.msg),
+            kv: extract_kv_to_object(datum.msg),
             message: Some(datum.msg.into()),
             host: Some(datum.host.into()),
             pri: Some(datum.pri.into()),
@@ -343,7 +344,7 @@ fn parse_syslog_line(line: & str) -> Result<Log, io::Error> {
 pub struct Log {
     pub app: String,
     pub sender_ip: Option<std::net::SocketAddr>,
-    pub kv: Option<Vec<(String, String)>>,
+    pub kv: Option<indexmap::IndexMap<String,String>>,
 
     pub pri: Option<String>,
     pub ts: Option<i64>,

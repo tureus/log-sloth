@@ -26,6 +26,7 @@ docopt = "0.8"
 openssl-probe = "0.1.2"
 hostname = "0.1"
 hyper = "*"
+indexmap = { version = "*", features = ["serde-1"] }
 
 [profile.release]
 lto = true
