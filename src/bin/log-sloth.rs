@@ -1,10 +1,10 @@
 extern crate docopt;
 
 extern crate ctrlc;
+extern crate indexmap;
 extern crate nom;
 extern crate nom_syslog;
 extern crate pretty_bytes;
-extern crate indexmap;
 
 #[macro_use]
 extern crate lazy_static;
@@ -13,13 +13,13 @@ extern crate lazy_static;
 extern crate serde_derive;
 extern crate serde_json;
 
-extern crate tokio_core;
-extern crate tokio_io;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate openssl_probe;
 extern crate rusoto_core;
 extern crate rusoto_kinesis;
+extern crate tokio_core;
+extern crate tokio_io;
 
 extern crate env_logger;
 #[macro_use]
@@ -32,20 +32,20 @@ extern crate log_sloth;
 use std::{env, io};
 use std::io::BufReader;
 use std::sync::Arc;
-use std::sync::atomic::{Ordering};
+use std::sync::atomic::Ordering;
 
 use docopt::Docopt;
 
 use nom_syslog::parse_syslog;
 use nom::IResult;
 
-use futures::{Sink,Stream,Future,lazy};
+use futures::{lazy, Future, Sink, Stream};
 use futures::stream::repeat;
-use futures::sync::mpsc::{ Sender, Receiver, channel };
-use futures_cpupool::{ CpuPool, Builder };
+use futures::sync::mpsc::{channel, Receiver, Sender};
+use futures_cpupool::{Builder, CpuPool};
 use tokio_core::reactor::Handle;
 
-use rusoto_core::{Region};
+use rusoto_core::Region;
 use rusoto_core::reactor::{CredentialsProvider, RequestDispatcher, DEFAULT_REACTOR};
 use rusoto_kinesis::{Kinesis, KinesisClient, ListStreamsInput, PutRecordsError, PutRecordsInput,
                      PutRecordsOutput, PutRecordsRequestEntry};
@@ -109,8 +109,8 @@ Options:
   --stats-interval=<s>  Stats interval in seconds [default: 15]
 ";
 
-const RECS_LOAD_FACTOR : usize = 10; // number of messages per record
-const RECS_PER_REQ : usize = 500; // API limit on records per request
+const RECS_LOAD_FACTOR: usize = 10; // number of messages per record
+const RECS_PER_REQ: usize = 500; // API limit on records per request
 
 #[derive(Debug, Deserialize)]
 struct Args {
@@ -157,46 +157,62 @@ fn get_kinesis_stream_name(thing: &DefaultKinesisClient) -> io::Result<String> {
     if streams.stream_names.len() != 1 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("I can only auto-discover 1 Kinesis stream, you have {}", streams.stream_names.len()),
+            format!(
+                "I can only auto-discover 1 Kinesis stream, you have {}",
+                streams.stream_names.len()
+            ),
         ));
     }
 
     Ok(streams.stream_names[0].clone())
 }
 
-
 pub struct SyslogClient<A> {
-    pub tx: std::rc::Rc<Sender<A>>
+    pub tx: std::rc::Rc<Sender<A>>,
 }
 
 pub struct SyslogServer {}
 
 impl SyslogServer {
     fn spawn_client(tcp_stream: tokio_core::net::TcpStream, tx: Sender<String>) {
-        DEFAULT_REACTOR.remote.spawn(move|_| {
+        DEFAULT_REACTOR.remote.spawn(move |_| {
             tokio_io::io::lines(BufReader::new(tcp_stream))
-                .forward(
-                    tx.sink_map_err(|e| {
-                            std::io::Error::new(std::io::ErrorKind::Other, format!("Could not forward message from server to connection {:?}", e))
-                        })
-                )
+                .forward(tx.sink_map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!(
+                            "Could not forward message from server to connection {:?}",
+                            e
+                        ),
+                    )
+                }))
                 .map_err(|_| ())
-                .and_then(|_| Ok(()) )
+                .and_then(|_| Ok(()))
         });
     }
 
     fn run(args: Args) {
-        log_sloth::stats::Stats::spawn_loop(args.flag_influxdb_url.clone(), args.flag_stats_interval);
-        info!("starting log sloth server: bind={} concurrency={} stream-name={}", args.flag_bind, args.flag_concurrency, &STREAM_NAME[..]);
+        log_sloth::stats::Stats::spawn_loop(
+            args.flag_influxdb_url.clone(),
+            args.flag_stats_interval,
+        );
+        info!(
+            "starting log sloth server: bind={} concurrency={} stream-name={}",
+            args.flag_bind,
+            args.flag_concurrency,
+            &STREAM_NAME[..]
+        );
 
         let bind_addr = args.flag_bind.clone();
         let concurrency = args.flag_concurrency;
 
         DEFAULT_REACTOR.remote.spawn(move |handle| {
-            let addr = bind_addr.parse().expect(&format!("could not parse addr {}", bind_addr));
+            let addr = bind_addr
+                .parse()
+                .expect(&format!("could not parse addr {}", bind_addr));
             let listener = tokio_core::net::TcpListener::bind(&addr, handle).unwrap();
 
-            let (records_tx,records_rx) = channel(100);
+            let (records_tx, records_rx) = channel(100);
             let records_rx_task = records_rx
                 .map(|batch: Vec<PutRecordsRequestEntry>| {
                     let input = PutRecordsInput {
@@ -204,28 +220,23 @@ impl SyslogServer {
                         stream_name: STREAM_NAME.clone(),
                     };
 
-                    KINESIS.put_records(&input)
-                        .then(inspect_kinesis_response)
+                    KINESIS.put_records(&input).then(inspect_kinesis_response)
                 })
                 .buffer_unordered(concurrency)
                 .for_each(|_| Ok(()));
 
-            let (strings_tx,strings_rx) = channel(RECS_PER_REQ*RECS_LOAD_FACTOR * 5);
+            let (strings_tx, strings_rx) = channel(RECS_PER_REQ * RECS_LOAD_FACTOR * 5);
             let strings_rx_task = strings_rx
-                .chunks(RECS_PER_REQ*RECS_LOAD_FACTOR)
-                .and_then(|batch| {
-                    CPU_POOL.spawn_fn(move || Ok(entries(&batch[..])))
-                })
-                .forward(
-                    records_tx.sink_map_err(|e| () )
-                );
+                .chunks(RECS_PER_REQ * RECS_LOAD_FACTOR)
+                .and_then(|batch| CPU_POOL.spawn_fn(move || Ok(entries(&batch[..]))))
+                .forward(records_tx.sink_map_err(|e| ()));
 
             let server_task = listener
                 .incoming()
                 .map_err(|_: std::io::Error| ())
                 .zip(repeat(strings_tx))
-                .for_each(|((tcp_stream, addr),tx_stream)| {
-                    Ok(SyslogServer::spawn_client(tcp_stream,tx_stream))
+                .for_each(|((tcp_stream, addr), tx_stream)| {
+                    Ok(SyslogServer::spawn_client(tcp_stream, tx_stream))
                 });
 
             server_task
@@ -241,7 +252,7 @@ impl SyslogServer {
 
 fn entries(batch: &[String]) -> Vec<PutRecordsRequestEntry> {
     // TODO: serialize in chunks to as writer handle of the buf
-    let record_line_batches : Vec<Vec<u8>> = batch
+    let record_line_batches: Vec<Vec<u8>> = batch
         .into_iter()
         .filter_map(|message| match parse_syslog_line(&message[..]) {
             Ok(log) => Some(log),
@@ -254,24 +265,28 @@ fn entries(batch: &[String]) -> Vec<PutRecordsRequestEntry> {
             let mut data = serde_json::to_vec(&log).expect("could not serialize");
             data.push(b'\n');
             data
-        }).collect();
+        })
+        .collect();
 
-    record_line_batches.chunks(RECS_LOAD_FACTOR)
+    record_line_batches
+        .chunks(RECS_LOAD_FACTOR)
         .enumerate()
         .map(|(i, record_lines)| {
             let total_bytes = record_lines.iter().map(|d| d.len()).sum();
 
-            let mut buf : Vec<u8> = vec![0; total_bytes];
+            let mut buf: Vec<u8> = vec![0; total_bytes];
             let mut start = 0;
 
             for d in record_lines {
-                let sub_buf = &mut buf[start .. start+d.len()];
+                let sub_buf = &mut buf[start..start + d.len()];
                 assert_eq!(sub_buf.len(), d.len());
                 sub_buf.copy_from_slice(&d[..]);
                 start += d.len();
-            };
+            }
 
-            STATS.tx_serialized_bytes.fetch_add(buf.len(), Ordering::Relaxed);
+            STATS
+                .tx_serialized_bytes
+                .fetch_add(buf.len(), Ordering::Relaxed);
             PutRecordsRequestEntry {
                 data: buf,
                 explicit_hash_key: None,
@@ -281,28 +296,29 @@ fn entries(batch: &[String]) -> Vec<PutRecordsRequestEntry> {
         .collect()
 }
 
-fn inspect_kinesis_response(response: Result<PutRecordsOutput,PutRecordsError>) -> Result<(),()> {
+fn inspect_kinesis_response(response: Result<PutRecordsOutput, PutRecordsError>) -> Result<(), ()> {
     debug!("response Ok: {}", response.is_ok());
     STATS.kinesis_inflight.fetch_sub(1, Ordering::Relaxed);
     match response {
         Ok(put) => {
             if let Some(failed) = put.failed_record_count {
-                STATS.kinesis_failures.fetch_add(failed as usize, Ordering::Relaxed);
+                STATS
+                    .kinesis_failures
+                    .fetch_add(failed as usize, Ordering::Relaxed);
 
                 for rec in put.records {
                     if rec.error_code.is_some() {
                         error!("failed record: {:?}", rec);
                     }
                 }
-
             }
-        },
+        }
         Err(put_records_err) => {
             // TODO: gotta STATS count all 500 lost records if the request is rejected
             match put_records_err {
                 PutRecordsError::HttpDispatch(dispatch_err) => {
                     error!("http dispatch error: {:?}", dispatch_err);
-                },
+                }
                 PutRecordsError::Unknown(raw_message) => {
                     error!("unknown error: '{:?}'", raw_message);
                 }
@@ -313,7 +329,7 @@ fn inspect_kinesis_response(response: Result<PutRecordsOutput,PutRecordsError>) 
     Ok(())
 }
 
-fn parse_syslog_line(line: & str) -> Result<Log, io::Error> {
+fn parse_syslog_line(line: &str) -> Result<Log, io::Error> {
     let res: IResult<&str, nom_syslog::Syslog3164Message> = parse_syslog(line);
     match res {
         IResult::Done(_, datum) => Ok(Log {
@@ -344,7 +360,7 @@ fn parse_syslog_line(line: & str) -> Result<Log, io::Error> {
 pub struct Log {
     pub app: String,
     pub sender_ip: Option<std::net::SocketAddr>,
-    pub kv: Option<indexmap::IndexMap<String,String>>,
+    pub kv: Option<indexmap::IndexMap<String, String>>,
 
     pub pri: Option<String>,
     pub ts: Option<i64>,

@@ -4,8 +4,8 @@ extern crate log;
 
 extern crate futures;
 extern crate hyper;
-extern crate tokio_core;
 extern crate rusoto_core;
+extern crate tokio_core;
 
 extern crate time;
 
@@ -30,8 +30,7 @@ pub fn rename_thread(input: &str) {
     prctl::set_name(input).unwrap();
 }
 #[cfg(not(target_os = "linux"))]
-pub fn rename_thread(_: &str) {
-}
+pub fn rename_thread(_: &str) {}
 
 pub fn extract_kv(input: &str) -> Vec<Vec<String>> {
     input
