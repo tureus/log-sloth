@@ -75,10 +75,15 @@ lazy_static! {
             std::process::exit(1);
         }
 
-        KinesisClient::simple(Region::Custom {
-            name: "local-stack-1".into(),
-            endpoint: "http://localhost:4568/".into(),
-        })
+        // TODO: that's right, I have an exemption for myself
+        if env::var("USER") == Ok("xlange".into()) {
+            KinesisClient::simple(Region::Custom {
+                name: "local-stack-1".into(),
+                endpoint: "http://localhost:4568/".into(),
+            })
+        } else {
+            KinesisClient::simple(Region::UsWest2)
+        }
     };
 
     static ref STREAM_NAME: String = {
@@ -103,7 +108,7 @@ Options:
   --stats-interval=<s>  Stats interval in seconds [default: 15]
 ";
 
-const RECS_LOAD_FACTOR : usize = 1; // number of messages per record
+const RECS_LOAD_FACTOR : usize = 10; // number of messages per record
 const RECS_PER_REQ : usize = 500; // API limit on records per request
 
 #[derive(Debug, Deserialize)]
@@ -193,27 +198,18 @@ impl SyslogServer {
             let (records_tx,records_rx) = channel(100);
             let records_rx_task = records_rx
                 .map(|batch: Vec<PutRecordsRequestEntry>| {
-                    info!("going to send stuff off to AWS! {}", batch.len());
                     let input = PutRecordsInput {
                         records: batch,
                         stream_name: STREAM_NAME.clone(),
                     };
 
                     KINESIS.put_records(&input)
-                        .then(|res| {
-                            if res.is_err() {
-                                error!("failed to send data {:?}", res);
-                            }
-                            Ok(())
-                        })
+                        .then(inspect_kinesis_response)
                 })
                 .buffer_unordered(concurrency)
-                .for_each(|_| {
-                    info!("another one bit the dust");
-                    Ok(())
-                });
+                .for_each(|_| Ok(()));
 
-            let (strings_tx,strings_rx) = channel(3000);
+            let (strings_tx,strings_rx) = channel(RECS_PER_REQ*RECS_LOAD_FACTOR * 5);
             let strings_rx_task = strings_rx
                 .chunks(RECS_PER_REQ*RECS_LOAD_FACTOR)
                 .and_then(|batch| {
@@ -282,11 +278,6 @@ fn entries(batch: &[String]) -> Vec<PutRecordsRequestEntry> {
             }
         })
         .collect()
-}
-
-fn inspect_kinesis_success(response: PutRecordsOutput) -> Result<(),()> {
-    info!("hey hey hey!!!!");
-    Ok(())
 }
 
 fn inspect_kinesis_response(response: Result<PutRecordsOutput,PutRecordsError>) -> Result<(),()> {
