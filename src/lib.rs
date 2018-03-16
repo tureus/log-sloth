@@ -11,8 +11,15 @@ extern crate time;
 
 extern crate prctl;
 
+extern crate indexmap;
+
+extern crate serde_json;
+
 #[macro_use]
 extern crate nom;
+
+#[macro_use]
+extern crate lazy_static;
 
 pub mod stats;
 pub mod fortigate_kv;
