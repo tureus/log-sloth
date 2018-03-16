@@ -103,7 +103,7 @@ Usage:
 Options:
   -h --help             Show this screen.
   --version             Show version.
-  --bind=<ADDR>         Listen to ADDR:IP [default: 127.0.0.1:1516]
+  --bind=<ADDR>         Listen to ADDR:IP [default: 0.0.0.0:1516]
   --concurrency=<kn>    Connections to Kinesis per client [default: 10]
   --influxdb-url=<url>  Target InfluxDB server [default: http://127.0.0.1:8086/write?db=telegraf]
   --stats-interval=<s>  Stats interval in seconds [default: 15]
