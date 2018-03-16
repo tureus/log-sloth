@@ -4,7 +4,7 @@
 # image, and deploy it with a tiny Alpine Linux container.
 
 # Our first FROM statement declares the build environment.
-FROM ekidd/rust-musl-builder AS builder
+FROM ekidd/rust-musl-builder:nightly AS builder
 
 # Add our source code.
 ADD . ./
