@@ -114,7 +114,7 @@ Options:
   --stats-interval=<s>  Stats interval in seconds [default: 15]
 ";
 
-const RECS_LOAD_FACTOR: usize = 1; // number of messages per record
+const RECS_LOAD_FACTOR: usize = 50; // number of messages per record
 const RECS_PER_REQ: usize = 500; // API limit on records per request
 
 #[derive(Debug, Deserialize)]
