@@ -82,14 +82,14 @@ lazy_static! {
         }
 
         // TODO: that's right, I have an exemption for myself
-        if env::var("USER") == Ok("xlange".into()) {
-            KinesisClient::simple(Region::Custom {
-                name: "local-stack-1".into(),
-                endpoint: "http://localhost:4568/".into(),
-            })
-        } else {
+//        if env::var("USER") == Ok("xlange".into()) {
+//            KinesisClient::simple(Region::Custom {
+//                name: "local-stack-1".into(),
+//                endpoint: "http://localhost:4568/".into(),
+//            })
+//        } else {
             KinesisClient::simple(Region::UsWest2)
-        }
+//        }
     };
 
     static ref STREAM_NAME: String = {
@@ -114,7 +114,7 @@ Options:
   --stats-interval=<s>  Stats interval in seconds [default: 15]
 ";
 
-const RECS_LOAD_FACTOR: usize = 10; // number of messages per record
+const RECS_LOAD_FACTOR: usize = 1; // number of messages per record
 const RECS_PER_REQ: usize = 500; // API limit on records per request
 
 #[derive(Debug, Deserialize)]
@@ -229,7 +229,10 @@ impl SyslogServer {
                     };
 
                     STATS.kinesis_inflight.fetch_add(1, Ordering::Relaxed);
-                    KINESIS.put_records(&input).then(inspect_kinesis_response)
+                    KINESIS
+                        .put_records(&input)
+                        .then(inspect_kinesis_response)
+                        .and_then(|_| Ok(()) )
                 })
                 .buffer_unordered(concurrency)
                 .for_each(|_| Ok(()));
@@ -306,7 +309,7 @@ fn entries(batch: &[String]) -> Vec<PutRecordsRequestEntry> {
 }
 
 fn inspect_kinesis_response(response: Result<PutRecordsOutput, PutRecordsError>) -> Result<(), ()> {
-    debug!("response Ok: {}", response.is_ok());
+//    info!("AWS response {:?}", response);
     STATS.kinesis_inflight.fetch_sub(1, Ordering::Relaxed);
     match response {
         Ok(put) => {
