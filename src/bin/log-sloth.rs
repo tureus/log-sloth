@@ -39,11 +39,10 @@ use docopt::Docopt;
 use nom_syslog::parse_syslog;
 use nom::IResult;
 
-use futures::{lazy, Future, Sink, Stream};
+use futures::{Future, Sink, Stream};
 use futures::stream::repeat;
-use futures::sync::mpsc::{channel, Receiver, Sender};
+use futures::sync::mpsc::{channel, Sender};
 use futures_cpupool::{Builder, CpuPool};
-use tokio_core::reactor::Handle;
 
 use rusoto_core::Region;
 use rusoto_core::reactor::{CredentialsProvider, RequestDispatcher, DEFAULT_REACTOR};
@@ -64,8 +63,14 @@ lazy_static! {
     };
 
     static ref STATS: Arc<Stats> = {
-        use std::default::Default;
-        Arc::new(Default::default())
+        let args: Args = Docopt::new(USAGE)
+            .and_then(|d| d.deserialize())
+            .unwrap_or_else(|e| e.exit());
+        let (stats,_) = Stats::spawn_thread(
+            args.flag_influxdb_url,
+            args.flag_stats_interval,
+        );
+        stats
     };
 
     static ref KINESIS: DefaultKinesisClient = {
@@ -175,8 +180,15 @@ pub struct SyslogServer {}
 
 impl SyslogServer {
     fn spawn_client(tcp_stream: tokio_core::net::TcpStream, tx: Sender<String>) {
+        STATS.clients.fetch_add(1, Ordering::Relaxed);
+
         DEFAULT_REACTOR.remote.spawn(move |_| {
             tokio_io::io::lines(BufReader::new(tcp_stream))
+                .inspect(|l| {
+                    STATS
+                        .rx_bytes
+                        .fetch_add(l.len(), Ordering::Relaxed);
+                })
                 .forward(tx.sink_map_err(|e| {
                     std::io::Error::new(
                         std::io::ErrorKind::Other,
@@ -192,10 +204,6 @@ impl SyslogServer {
     }
 
     fn run(args: Args) {
-        log_sloth::stats::Stats::spawn_loop(
-            args.flag_influxdb_url.clone(),
-            args.flag_stats_interval,
-        );
         info!(
             "starting log sloth server: bind={} concurrency={} stream-name={}",
             args.flag_bind,
@@ -220,6 +228,7 @@ impl SyslogServer {
                         stream_name: STREAM_NAME.clone(),
                     };
 
+                    STATS.kinesis_inflight.fetch_add(1, Ordering::Relaxed);
                     KINESIS.put_records(&input).then(inspect_kinesis_response)
                 })
                 .buffer_unordered(concurrency)
@@ -229,13 +238,13 @@ impl SyslogServer {
             let strings_rx_task = strings_rx
                 .chunks(RECS_PER_REQ * RECS_LOAD_FACTOR)
                 .and_then(|batch| CPU_POOL.spawn_fn(move || Ok(entries(&batch[..]))))
-                .forward(records_tx.sink_map_err(|e| ()));
+                .forward(records_tx.sink_map_err(|_| ()));
 
             let server_task = listener
                 .incoming()
                 .map_err(|_: std::io::Error| ())
                 .zip(repeat(strings_tx))
-                .for_each(|((tcp_stream, addr), tx_stream)| {
+                .for_each(|((tcp_stream, _), tx_stream)| {
                     Ok(SyslogServer::spawn_client(tcp_stream, tx_stream))
                 });
 
