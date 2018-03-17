@@ -1,4 +1,4 @@
-target/*
+target/
 nom-syslog.iml
 nom-syslog.ipr
 nom-syslog.iws

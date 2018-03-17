@@ -1,16 +1,21 @@
-.PHONY: push deploy local
+.PHONY: build build-env-image push push-perf create deploy login local
 
 REPO := $(shell aws ecr describe-repositories | jq -r '.repositories | map(select(.repositoryName == "log-sloth") | .repositoryUri) | first')
 TAG := $(shell date +%Y-%m-%d-%H-%M)
 
-build:
-	docker build ${BUILD_FLAGS} -t $(REPO):$(TAG) .
+build: # did you run build-env-image recently?
+	docker run --rm -it -v $(PWD):/home/rust/src log-sloth-build-env cargo build --release
+	cp target/x86_64-unknown-linux-musl/release/log-sloth target/log-sloth
+	docker build $(BUILD_FLAGS) -t $(REPO):$(TAG) .
 
-push-perf:
-	BUILD_FLAGS="-f Dockerfile.perf" $(MAKE) push
+build-env-image:
+	docker build -t log-sloth-build-env -f Dockerfile.build-env .
 
 push: build
 	docker push $(REPO):$(TAG)
+
+push-perf:
+	BUILD_FLAGS="-f Dockerfile.perf" $(MAKE) push
 
 create:
 	kubectl create -f docker/log-sloth-deployment.yml

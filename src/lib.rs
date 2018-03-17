@@ -100,3 +100,31 @@ fn fortigate_parses_remove_kv() {
     ];
     assert_eq!(res, expected)
 }
+
+pub fn flatten_lines(lines: &[Vec<u8>]) -> Vec<u8> {
+    let total_bytes = lines.iter().map(|d| d.len()).sum();
+
+    let mut buf: Vec<u8> = vec![0; total_bytes];
+    let mut start = 0;
+
+    for d in lines {
+        let sub_buf = &mut buf[start..start + d.len()];
+        assert_eq!(sub_buf.len(), d.len());
+        sub_buf.copy_from_slice(&d[..]);
+        start += d.len();
+    }
+
+    buf
+}
+
+#[test]
+fn flatten_some_bufs() {
+    let lines: Vec<Vec<u8>> = vec![
+        vec![0, 1, 2, 3],
+        vec![4, 5, 6, 7],
+    ];
+
+    let buf = flatten_lines(&lines[..]);
+    assert_eq!(buf, vec![0,1,2,3,4,5,6,7]);
+    assert_eq!(buf.capacity(), 8);
+}

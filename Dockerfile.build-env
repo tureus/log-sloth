@@ -1,0 +1,5 @@
+FROM ekidd/rust-musl-builder:nightly
+
+ADD . /home/rust/src
+RUN cargo build --release
+

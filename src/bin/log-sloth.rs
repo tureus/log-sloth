@@ -41,7 +41,7 @@ use nom::IResult;
 
 use futures::{Future, Sink, Stream};
 use futures::stream::repeat;
-use futures::sync::mpsc::{channel, Sender};
+use futures::sync::mpsc::{channel, Sender, Receiver};
 use futures_cpupool::{Builder, CpuPool};
 
 use rusoto_core::Region;
@@ -101,7 +101,7 @@ const USAGE: &str = "
 log-sloth.
 
 Usage:
-  log-sloth [--bind=ADDR] [--concurrency=N] [--disable-retry] [--enable-stats [--influxdb-url=URL] [--stats-interval=SEC]]
+  log-sloth [--bind=ADDR] [--concurrency=N] [--load-factor=LF] [--enable-stats [--influxdb-url=URL] [--stats-interval=SEC]]
   log-sloth (-h | --help)
   log-sloth --version
 
@@ -109,13 +109,15 @@ Options:
   -h --help             Show this screen.
   --version             Show version.
   --bind=<ADDR>         Listen to ADDR:IP [default: 0.0.0.0:1516]
+  --load-factor=<lf>    Number of Logs to put in each Kinesis PutRecordRequestEntry [default: 1]
   --concurrency=<kn>    Connections to Kinesis per client [default: 10]
   --influxdb-url=<url>  Target InfluxDB server [default: http://127.0.0.1:8086/write?db=telegraf]
   --stats-interval=<s>  Stats interval in seconds [default: 15]
 ";
 
-const RECS_LOAD_FACTOR: usize = 50; // number of messages per record
 const RECS_PER_REQ: usize = 500; // API limit on records per request
+const STRING_CHAN_BUF : usize = 10; // How big should the channel be between CPU_POOL and Kinesis
+const RECORDS_CHAN_BUF : usize = 10;
 
 #[derive(Debug, Deserialize)]
 struct Args {
@@ -123,6 +125,7 @@ struct Args {
     pub flag_concurrency: usize,
     pub flag_influxdb_url: String,
     pub flag_stats_interval: u64,
+    pub flag_load_factor: usize,
 }
 
 fn main() {
@@ -213,6 +216,7 @@ impl SyslogServer {
 
         let bind_addr = args.flag_bind.clone();
         let concurrency = args.flag_concurrency;
+        let load_factor = args.flag_load_factor;
 
         DEFAULT_REACTOR.remote.spawn(move |handle| {
             let addr = bind_addr
@@ -220,9 +224,18 @@ impl SyslogServer {
                 .expect(&format!("could not parse addr {}", bind_addr));
             let listener = tokio_core::net::TcpListener::bind(&addr, handle).unwrap();
 
-            let (records_tx, records_rx) = channel(100);
+            let (records_tx, records_rx) : (_, Receiver<Vec<PutRecordsRequestEntry>>) = channel(RECORDS_CHAN_BUF);
+
+            let loopback_tx = records_tx.clone();
             let records_rx_task = records_rx
-                .map(|batch: Vec<PutRecordsRequestEntry>| {
+                .zip(repeat(loopback_tx))
+                .map(|(batch,rtx): (Vec<PutRecordsRequestEntry>, Sender<Vec<PutRecordsRequestEntry>>)| {
+                    let total_bytes = batch.iter().map(|x| x.data.len()).sum();
+                    error!("PutRecordsRequestEntry {} records, {} byte payload", batch.len(), pretty_bytes::converter::convert(total_bytes as f64));
+                    STATS
+                        .tx_serialized_bytes
+                        .fetch_add(total_bytes, Ordering::Relaxed);
+
                     let input = PutRecordsInput {
                         records: batch,
                         stream_name: STREAM_NAME.clone(),
@@ -231,17 +244,22 @@ impl SyslogServer {
                     STATS.kinesis_inflight.fetch_add(1, Ordering::Relaxed);
                     KINESIS
                         .put_records(&input)
-                        .then(inspect_kinesis_response)
+                        .then(move |x|{
+                            inspect_kinesis_response(x, input, rtx)
+                        })
                         .and_then(|_| Ok(()) )
                 })
                 .buffer_unordered(concurrency)
                 .for_each(|_| Ok(()));
 
-            let (strings_tx, strings_rx) = channel(RECS_PER_REQ * RECS_LOAD_FACTOR * 5);
+            let (strings_tx, strings_rx) = channel(STRING_CHAN_BUF);
             let strings_rx_task = strings_rx
-                .chunks(RECS_PER_REQ * RECS_LOAD_FACTOR)
-                .and_then(|batch| CPU_POOL.spawn_fn(move || Ok(entries(&batch[..]))))
+                .chunks(RECS_PER_REQ * load_factor)
+                .zip(repeat(load_factor))
+                .and_then(|(batch,load_factor)| CPU_POOL.spawn_fn(move || Ok(entries(&batch[..], load_factor))))
                 .forward(records_tx.sink_map_err(|_| ()));
+
+
 
             let server_task = listener
                 .incoming()
@@ -262,7 +280,7 @@ impl SyslogServer {
     }
 }
 
-fn entries(batch: &[String]) -> Vec<PutRecordsRequestEntry> {
+fn entries(batch: &[String], load_factor: usize) -> Vec<PutRecordsRequestEntry> {
     // TODO: serialize in chunks to as writer handle of the buf
     let record_line_batches: Vec<Vec<u8>> = batch
         .into_iter()
@@ -281,24 +299,11 @@ fn entries(batch: &[String]) -> Vec<PutRecordsRequestEntry> {
         .collect();
 
     record_line_batches
-        .chunks(RECS_LOAD_FACTOR)
+        .chunks(load_factor)
         .enumerate()
         .map(|(i, record_lines)| {
-            let total_bytes = record_lines.iter().map(|d| d.len()).sum();
+            let buf = log_sloth::flatten_lines(record_lines);
 
-            let mut buf: Vec<u8> = vec![0; total_bytes];
-            let mut start = 0;
-
-            for d in record_lines {
-                let sub_buf = &mut buf[start..start + d.len()];
-                assert_eq!(sub_buf.len(), d.len());
-                sub_buf.copy_from_slice(&d[..]);
-                start += d.len();
-            }
-
-            STATS
-                .tx_serialized_bytes
-                .fetch_add(buf.len(), Ordering::Relaxed);
             PutRecordsRequestEntry {
                 data: buf,
                 explicit_hash_key: None,
@@ -308,15 +313,17 @@ fn entries(batch: &[String]) -> Vec<PutRecordsRequestEntry> {
         .collect()
 }
 
-fn inspect_kinesis_response(response: Result<PutRecordsOutput, PutRecordsError>) -> Result<(), ()> {
-//    info!("AWS response {:?}", response);
+fn inspect_kinesis_response(response: Result<PutRecordsOutput, PutRecordsError>, input: PutRecordsInput, tx: Sender<Vec<PutRecordsRequestEntry>>) -> Result<(), ()> {
     STATS.kinesis_inflight.fetch_sub(1, Ordering::Relaxed);
     match response {
         Ok(put) => {
             if let Some(failed) = put.failed_record_count {
-                STATS
-                    .kinesis_failures
-                    .fetch_add(failed as usize, Ordering::Relaxed);
+                if failed > 0 {
+                    STATS
+                        .kinesis_failures
+                        .fetch_add(1, Ordering::Relaxed);
+                    error!("kinesis reported {} failed records", failed);
+                }
 
                 for rec in put.records {
                     if rec.error_code.is_some() {
@@ -326,6 +333,9 @@ fn inspect_kinesis_response(response: Result<PutRecordsOutput, PutRecordsError>)
             }
         }
         Err(put_records_err) => {
+            STATS
+                .kinesis_failures
+                .fetch_add(1, Ordering::Relaxed);
             // TODO: gotta STATS count all 500 lost records if the request is rejected
             match put_records_err {
                 PutRecordsError::HttpDispatch(dispatch_err) => {
