@@ -101,7 +101,7 @@ const USAGE: &str = "
 log-sloth.
 
 Usage:
-  log-sloth [--bind=ADDR] [--concurrency=N] [--load-factor=LF] [--enable-stats [--influxdb-url=URL] [--stats-interval=SEC]]
+  log-sloth [--bind=ADDR] [--concurrency=N] [--load-factor=LF] [--records=RS] [--enable-stats [--influxdb-url=URL] [--stats-interval=SEC]]
   log-sloth (-h | --help)
   log-sloth --version
 
@@ -110,14 +110,14 @@ Options:
   --version             Show version.
   --bind=<ADDR>         Listen to ADDR:IP [default: 0.0.0.0:1516]
   --load-factor=<lf>    Number of Logs to put in each Kinesis PutRecordRequestEntry [default: 1]
+  --records=<r>         Number of records to send [default: 500]
   --concurrency=<kn>    Connections to Kinesis per client [default: 10]
   --influxdb-url=<url>  Target InfluxDB server [default: http://127.0.0.1:8086/write?db=telegraf]
   --stats-interval=<s>  Stats interval in seconds [default: 15]
 ";
 
-const RECS_PER_REQ: usize = 500; // API limit on records per request
-const STRING_CHAN_BUF : usize = 10; // How big should the channel be between CPU_POOL and Kinesis
-const RECORDS_CHAN_BUF : usize = 10;
+const STRING_CHAN_BUF : usize = 5; // How big should the channel be between CPU_POOL and Kinesis
+const RECORDS_CHAN_BUF : usize = 5;
 
 #[derive(Debug, Deserialize)]
 struct Args {
@@ -126,6 +126,7 @@ struct Args {
     pub flag_influxdb_url: String,
     pub flag_stats_interval: u64,
     pub flag_load_factor: usize,
+    pub flag_records: usize,
 }
 
 fn main() {
@@ -207,16 +208,19 @@ impl SyslogServer {
     }
 
     fn run(args: Args) {
-        info!(
-            "starting log sloth server: bind={} concurrency={} stream-name={}",
-            args.flag_bind,
-            args.flag_concurrency,
-            &STREAM_NAME[..]
-        );
-
         let bind_addr = args.flag_bind.clone();
         let concurrency = args.flag_concurrency;
         let load_factor = args.flag_load_factor;
+        let records_per_request = args.flag_records;
+
+        info!(
+            "starting log sloth server: bind={} concurrency={} stream-name={} load-factor={} rpr={}",
+            bind_addr,
+            concurrency,
+            &STREAM_NAME[..],
+            load_factor,
+            records_per_request,
+        );
 
         DEFAULT_REACTOR.remote.spawn(move |handle| {
             let addr = bind_addr
@@ -254,7 +258,7 @@ impl SyslogServer {
 
             let (strings_tx, strings_rx) = channel(STRING_CHAN_BUF);
             let strings_rx_task = strings_rx
-                .chunks(RECS_PER_REQ * load_factor)
+                .chunks(records_per_request * load_factor)
                 .zip(repeat(load_factor))
                 .and_then(|(batch,load_factor)| CPU_POOL.spawn_fn(move || Ok(entries(&batch[..], load_factor))))
                 .forward(records_tx.sink_map_err(|_| ()));

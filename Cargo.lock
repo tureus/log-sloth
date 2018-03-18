@@ -157,6 +157,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "csv"
+version = "1.0.0-beta.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "csv-core 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "serde 1.0.33 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "csv-core"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "memchr 2.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "ctrlc"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -427,6 +444,7 @@ dependencies = [
 name = "log-sloth"
 version = "0.3.0"
 dependencies = [
+ "csv 1.0.0-beta.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "ctrlc 3.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "docopt 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "env_logger 0.5.5 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -774,7 +792,7 @@ dependencies = [
 [[package]]
 name = "rusoto_core"
 version = "0.32.0"
-source = "git+https://github.com/tureus/rusoto#51a0c56bfcc4cae457f09851019454d48b25d24d"
+source = "git+https://github.com/tureus/rusoto#0562b23690dd9ff4f2f453882d2477c547d0c2b3"
 dependencies = [
  "base64 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.18 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -797,7 +815,7 @@ dependencies = [
 [[package]]
 name = "rusoto_credential"
 version = "0.11.0"
-source = "git+https://github.com/tureus/rusoto#51a0c56bfcc4cae457f09851019454d48b25d24d"
+source = "git+https://github.com/tureus/rusoto#0562b23690dd9ff4f2f453882d2477c547d0c2b3"
 dependencies = [
  "chrono 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.18 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -811,7 +829,7 @@ dependencies = [
 [[package]]
 name = "rusoto_kinesis"
 version = "0.32.0"
-source = "git+https://github.com/tureus/rusoto#51a0c56bfcc4cae457f09851019454d48b25d24d"
+source = "git+https://github.com/tureus/rusoto#0562b23690dd9ff4f2f453882d2477c547d0c2b3"
 dependencies = [
  "futures 0.1.18 (registry+https://github.com/rust-lang/crates.io-index)",
  "hyper 0.11.22 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1288,6 +1306,8 @@ dependencies = [
 "checksum crossbeam-epoch 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "2066d2bac93369853e53064ae60d7eab9e8edba77be4ad81bc7628be30aa7960"
 "checksum crossbeam-utils 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "2760899e32a1d58d5abb31129f8fae5de75220bc2176e77ff7c627ae45c918d9"
 "checksum crypto-mac 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)" = "0999b4ff4d3446d4ddb19a63e9e00c1876e75cd7000d20e57a693b4b3f08d958"
+"checksum csv 1.0.0-beta.5 (registry+https://github.com/rust-lang/crates.io-index)" = "e7a9e063dcebdb56c306f23e672bfd31df3da8ec5f6d696b35f2c29c2a9572f0"
+"checksum csv-core 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)" = "4dd8e6d86f7ba48b4276ef1317edc8cc36167546d8972feb4a2b5fec0b374105"
 "checksum ctrlc 3.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "653abc99aa905f693d89df4797fadc08085baee379db92be9f2496cefe8a6f2c"
 "checksum digest 0.7.2 (registry+https://github.com/rust-lang/crates.io-index)" = "00a49051fef47a72c9623101b19bd71924a45cca838826caae3eaa4d00772603"
 "checksum docopt 0.8.3 (registry+https://github.com/rust-lang/crates.io-index)" = "d8acd393692c503b168471874953a2531df0e9ab77d0b6bbc582395743300a4a"

@@ -2,7 +2,7 @@
 FROM alpine:latest
 ADD docker/apk-repositories /etc/apk/repositories
 RUN apk --no-cache add ca-certificates htop sysstat procps
-ADD target/log-sloth \
+ADD target/from_musl/log-sloth \
     /usr/local/bin/
 CMD /usr/local/bin/log-sloth
 

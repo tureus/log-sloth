@@ -3,9 +3,19 @@
 REPO := $(shell aws ecr describe-repositories | jq -r '.repositories | map(select(.repositoryName == "log-sloth") | .repositoryUri) | first')
 TAG := $(shell date +%Y-%m-%d-%H-%M)
 
+# We need to thread the needle: mount-bind everything from
+# here except for the cached build environment. We want to reuse
+# the prebuilt libs if Cargo decides they are relevant. Cargo will take care
+# of reusing or rebuilding as necessary.
+SRC := /home/rust/src
+MUSL_BIN := target/x86_64-unknown-linux-musl/release/log-sloth
+MUSL_HATCH := target/from_musl/
+DASH_V := -v $(PWD)/Cargo.toml:$(SRC)/Cargo.toml -v $(PWD)/Cargo.lock:$(SRC)/Cargo.lock -v $(PWD)/src/:$(SRC)/src/ -v $(PWD)/nom-syslog/:$(SRC)/src/nom-syslog/ -v $(PWD)/$(MUSL_HATCH):$(SRC)/$(MUSL_HATCH)
+
+
 build: # did you run build-env-image recently?
-	docker run --rm -it -v $(PWD):/home/rust/src log-sloth-build-env cargo build --release
-	cp target/x86_64-unknown-linux-musl/release/log-sloth target/log-sloth
+	mkdir -p $(MUSL_HATCH)
+	docker run --rm -it $(DASH_V) log-sloth-build-env bash -c "cargo build --release && mv $(MUSL_BIN) $(MUSL_HATCH)"
 	docker build $(BUILD_FLAGS) -t $(REPO):$(TAG) .
 
 build-env-image:
