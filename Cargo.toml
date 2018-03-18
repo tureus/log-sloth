@@ -27,7 +27,8 @@ openssl-probe = "0.1.2"
 hostname = "0.1"
 hyper = "*"
 indexmap = { version = "*", features = ["serde-1"] }
+csv = "1.0.0-beta.5"
 
 [profile.release]
 lto = true
-debug = true
+#debug = true

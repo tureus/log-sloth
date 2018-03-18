@@ -13,7 +13,10 @@ extern crate prctl;
 
 extern crate indexmap;
 
+extern crate serde;
 extern crate serde_json;
+#[macro_use]
+extern crate serde_derive;
 
 #[macro_use]
 extern crate nom;
@@ -21,9 +24,14 @@ extern crate nom;
 #[macro_use]
 extern crate lazy_static;
 
+extern crate csv;
+
 pub mod stats;
 pub mod fortigate_kv;
 pub mod max_size_chunk;
+
+mod enrichment_lookup_table;
+pub use enrichment_lookup_table::CSVLookupTable;
 
 #[cfg(target_os = "linux")]
 pub fn rename_thread(input: &str) {
