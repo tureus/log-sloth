@@ -163,11 +163,6 @@ fn get_kinesis_stream_name(thing: &DefaultKinesisClient) -> io::Result<String> {
     Ok(streams.stream_names[0].clone())
 }
 
-
-pub struct SyslogClient<A> {
-    pub tx: std::rc::Rc<Sender<A>>
-}
-
 pub struct SyslogServer {}
 
 impl SyslogServer {
@@ -215,6 +210,7 @@ impl SyslogServer {
                 .and_then(|batch| {
                     CPU_POOL.spawn_fn(move || Ok(entries(&batch[..])))
                 })
+                .
                 .forward(
                     records_tx.sink_map_err(|e| () )
                 );
