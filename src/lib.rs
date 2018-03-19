@@ -4,27 +4,41 @@ extern crate log;
 
 extern crate futures;
 extern crate hyper;
-extern crate tokio_core;
 extern crate rusoto_core;
+extern crate tokio_core;
 
 extern crate time;
 
 extern crate prctl;
 
+extern crate indexmap;
+
+extern crate serde;
+extern crate serde_json;
+#[macro_use]
+extern crate serde_derive;
+
 #[macro_use]
 extern crate nom;
+
+#[macro_use]
+extern crate lazy_static;
+
+extern crate csv;
 
 pub mod stats;
 pub mod fortigate_kv;
 pub mod max_size_chunk;
+
+mod enrichment_lookup_table;
+pub use enrichment_lookup_table::CSVLookupTable;
 
 #[cfg(target_os = "linux")]
 pub fn rename_thread(input: &str) {
     prctl::set_name(input).unwrap();
 }
 #[cfg(not(target_os = "linux"))]
-pub fn rename_thread(_: &str) {
-}
+pub fn rename_thread(_: &str) {}
 
 pub fn extract_kv(input: &str) -> Vec<Vec<String>> {
     input
@@ -93,4 +107,32 @@ fn fortigate_parses_remove_kv() {
         vec!["appcat".into(), r#"unscanned"#.into()],
     ];
     assert_eq!(res, expected)
+}
+
+pub fn flatten_lines(lines: &[Vec<u8>]) -> Vec<u8> {
+    let total_bytes = lines.iter().map(|d| d.len()).sum();
+
+    let mut buf: Vec<u8> = vec![0; total_bytes];
+    let mut start = 0;
+
+    for d in lines {
+        let sub_buf = &mut buf[start..start + d.len()];
+        assert_eq!(sub_buf.len(), d.len());
+        sub_buf.copy_from_slice(&d[..]);
+        start += d.len();
+    }
+
+    buf
+}
+
+#[test]
+fn flatten_some_bufs() {
+    let lines: Vec<Vec<u8>> = vec![
+        vec![0, 1, 2, 3],
+        vec![4, 5, 6, 7],
+    ];
+
+    let buf = flatten_lines(&lines[..]);
+    assert_eq!(buf, vec![0,1,2,3,4,5,6,7]);
+    assert_eq!(buf.capacity(), 8);
 }
