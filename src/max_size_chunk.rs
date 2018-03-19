@@ -13,7 +13,7 @@ use futures::stream::{Stream, Fuse};
 #[derive(Debug)]
 #[must_use = "streams do nothing unless polled"]
 pub struct MaxSizeChunk<S>
-    where S: Stream
+    where S: Stream<Item=String>
 {
     items: Vec<S::Item>,
     max_bytes: usize,
@@ -22,7 +22,7 @@ pub struct MaxSizeChunk<S>
 }
 
 pub fn new<S>(s: S, capacity: usize, max_bytes: usize) -> MaxSizeChunk<S>
-    where S: Stream
+    where S: Stream<Item=String>
 {
     assert!(capacity > 0);
 
@@ -36,7 +36,7 @@ pub fn new<S>(s: S, capacity: usize, max_bytes: usize) -> MaxSizeChunk<S>
 
 // Forwarding impl of Sink from the underlying stream
 impl<S> futures::sink::Sink for MaxSizeChunk<S>
-    where S: futures::sink::Sink + Stream
+    where S: futures::sink::Sink + Stream<Item=String>
 {
     type SinkItem = S::SinkItem;
     type SinkError = S::SinkError;
@@ -55,7 +55,7 @@ impl<S> futures::sink::Sink for MaxSizeChunk<S>
 }
 
 
-impl<S> MaxSizeChunk<S> where S: Stream {
+impl<S> MaxSizeChunk<S> where S: Stream<Item=String> {
     fn take(&mut self) -> Vec<S::Item> {
         let cap = self.items.capacity();
         mem::replace(&mut self.items, Vec::with_capacity(cap))
@@ -86,7 +86,7 @@ impl<S> MaxSizeChunk<S> where S: Stream {
 }
 
 impl<S> Stream for MaxSizeChunk<S>
-    where S: Stream
+    where S: Stream<Item=String>
 {
     type Item = Vec<<S as Stream>::Item>;
     type Error = <S as Stream>::Error;
